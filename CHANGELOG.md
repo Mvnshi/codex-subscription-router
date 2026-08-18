@@ -25,6 +25,9 @@ this project uses [Semantic Versioning](https://semver.org/).
 - The account menu, Usage sheet, and Plugins picker open with the last known
   subscriptions and usage and refresh in place instead of showing a connecting
   state on every open.
+- The copied app can no longer start Sparkle through the renderer's update
+  gate or the Check for Updates menu item, so it does not offer to replace
+  itself with an unpatched official build.
 
 ## [0.1.0] - 2026-08-15
 

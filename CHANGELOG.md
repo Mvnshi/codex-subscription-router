@@ -15,6 +15,7 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Empty `patch_arguments` expansion in `install.sh` under bash 3.2 `set -u`.
 - Slow profile-photo requests no longer block the first subscription list from
   showing connected accounts.
 - Profile menus now dismiss normally on outside clicks and Escape after an
@@ -30,6 +31,7 @@ this project uses [Semantic Versioning](https://semver.org/).
 - The copied app can no longer start Sparkle through the renderer's update
   gate or the Check for Updates menu item, so it does not offer to replace
   itself with an unpatched official build.
+
 
 ## [0.1.0] - 2026-08-15
 

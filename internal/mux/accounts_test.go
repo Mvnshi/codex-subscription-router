@@ -1,7 +1,10 @@
 package mux
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -17,6 +20,141 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return function(request)
+}
+
+func TestAccountSnapshotsPreserveUnavailableAccountsAfterDeadline(t *testing.T) {
+	multiplexer, accounts, responseDir := newAccountSnapshotTestMultiplexer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	snapshotResult := make(chan []AccountSnapshot, 1)
+	go func() { snapshotResult <- multiplexer.Accounts(ctx) }()
+	waitForAccountSnapshotResponses(t, responseDir, accounts[:2])
+	cancel()
+
+	startedAt := time.Now()
+	snapshots := <-snapshotResult
+	if elapsed := time.Since(startedAt); elapsed > time.Second {
+		t.Fatalf("account list did not return promptly after its deadline: %s", elapsed)
+	}
+	if len(snapshots) != len(accounts) {
+		t.Fatalf("account list lost persisted accounts after a child blocked: got %d, want %d (%#v)", len(snapshots), len(accounts), snapshots)
+	}
+	for index, account := range accounts {
+		if snapshots[index].ID != account.ID || snapshots[index].Label != account.Label ||
+			snapshots[index].Enabled != account.Enabled || snapshots[index].Controller != account.Controller ||
+			snapshots[index].CreatedAt != account.CreatedAt {
+			t.Fatalf("persisted account was not preserved at %d: got %#v, want %#v", index, snapshots[index], account)
+		}
+	}
+
+	for _, responsive := range snapshots[:2] {
+		if responsive.Error != "" || !responsive.Connected || responsive.AuthType != "api" {
+			t.Fatalf("live child response did not replace its fallback: %#v", responsive)
+		}
+	}
+	blocked := snapshots[len(snapshots)-1]
+	if blocked.ID != accounts[len(accounts)-1].ID || blocked.Error != context.Canceled.Error() {
+		t.Fatalf("blocked account did not retain an unavailable fallback: %#v", blocked)
+	}
+	if blocked.Connected {
+		t.Fatalf("unavailable account must not be treated as connected or routeable: %#v", blocked)
+	}
+}
+
+func newAccountSnapshotTestMultiplexer(t *testing.T) (*Multiplexer, []state.Account, string) {
+	t.Helper()
+	root := t.TempDir()
+	primaryHome := filepath.Join(root, "primary")
+	if err := os.MkdirAll(primaryHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.Open(filepath.Join(root, "mux"), primaryHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddAccount("Responsive"); err != nil {
+		t.Fatal(err)
+	}
+	blockedAccount, err := store.AddAccount("Blocked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blockedAccount.CodexHome, "block-account-read"), []byte("1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	responseDir := filepath.Join(root, "account-read-responses")
+	if err := os.MkdirAll(responseDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	multiplexer, err := New(Options{
+		RealExecutable: os.Args[0],
+		RealArgs:       []string{"-test.run=TestAccountSnapshotHelperProcess", "--"},
+		Environment: append(
+			os.Environ(),
+			"GO_WANT_ACCOUNT_SNAPSHOT_HELPER=1",
+			"CODEX_MUX_TEST_RESPONSE_DIR="+responseDir,
+		),
+		Store:  store,
+		Output: io.Discard,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, account := range store.Accounts() {
+		if _, err := multiplexer.startChild(context.Background(), account); err != nil {
+			multiplexer.Close()
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(multiplexer.Close)
+	return multiplexer, store.Accounts(), responseDir
+}
+
+func waitForAccountSnapshotResponses(t *testing.T, responseDir string, accounts []state.Account) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		ready := true
+		for _, account := range accounts {
+			if _, err := os.Stat(filepath.Join(responseDir, filepath.Base(account.CodexHome))); err != nil {
+				if !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+				ready = false
+			}
+		}
+		if ready {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("responsive children did not send account/read responses")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestAccountSnapshotHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_ACCOUNT_SNAPSHOT_HELPER") != "1" {
+		return
+	}
+	_, blocksAccountRead := os.Stat(filepath.Join(os.Getenv("CODEX_HOME"), "block-account-read"))
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		var request struct {
+			ID     string `json:"id"`
+			Method string `json:"method"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &request) != nil || request.Method != "account/read" {
+			continue
+		}
+		if blocksAccountRead == nil {
+			time.Sleep(time.Hour)
+		}
+		_, _ = fmt.Fprintf(os.Stdout, `{"id":%q,"result":{"account":{"type":"api"}}}`+"\n", request.ID)
+		if responseDir := os.Getenv("CODEX_MUX_TEST_RESPONSE_DIR"); responseDir != "" {
+			_ = os.WriteFile(filepath.Join(responseDir, filepath.Base(os.Getenv("CODEX_HOME"))), []byte("1"), 0o600)
+		}
+	}
+	os.Exit(0)
 }
 
 func TestPlanLabel(t *testing.T) {

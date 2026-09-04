@@ -21,6 +21,8 @@ type Server struct {
 	http    *http.Server
 }
 
+const accountListTimeout = 5 * time.Second
+
 func New(address, token string, multiplexer *mux.Multiplexer, uiTests bool) *Server {
 	server := &Server{token: token, mux: multiplexer, uiTests: uiTests}
 	router := http.NewServeMux()
@@ -161,7 +163,7 @@ func (s *Server) accounts(response http.ResponseWriter, request *http.Request) {
 	}
 	switch request.Method {
 	case http.MethodGet:
-		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(request.Context(), accountListTimeout)
 		defer cancel()
 		writeJSON(response, http.StatusOK, map[string]any{"accounts": s.mux.Accounts(ctx)})
 	case http.MethodPost:

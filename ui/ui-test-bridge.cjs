@@ -64,23 +64,43 @@ async function runAction(window, action, delayMs) {
   }
   if (action === "usage-select-second") {
     const selected = await window.webContents.executeJavaScript(`(() => {
-      const target=[...document.querySelectorAll('button[aria-pressed]')]
-        .find(button=>button.textContent?.includes('Subscription 2'));
+      const accountButtons=[...document.querySelectorAll('button[aria-pressed]')]
+        .filter(button=>/resets? (?:available|unavailable)/i.test(button.textContent??''));
+      const target=accountButtons[1];
       if(!target)return false;
       target.click();
       return true;
     })()`);
     if (!selected) throw new Error("Could not select a secondary reset subscription");
     const selectionState = await window.webContents.executeJavaScript(`new Promise((resolve) => {
-      const read=()=>{const target=[...document.querySelectorAll('button[aria-pressed]')]
-        .find(button=>button.textContent?.includes('Subscription 2'));
-        return {accountId:globalThis.__codexMuxResetAccountId??null,pressed:target?.getAttribute('aria-pressed')??null};};
+      const read=()=>{const buttons=[...document.querySelectorAll('button[aria-pressed]')]
+        .filter(button=>/resets? (?:available|unavailable)/i.test(button.textContent??''));
+        return {scoped:globalThis.__codexMuxResetAccountId!=null&&globalThis.__codexMuxResetAccountId!=="primary",pressed:buttons[1]?.getAttribute('aria-pressed')??null};};
       const deadline=Date.now()+4000;
-      const poll=()=>{const state=read();if(state.accountId&&state.accountId!=="primary"&&state.pressed==="true")resolve(state);else if(Date.now()>=deadline)resolve(state);else setTimeout(poll,100);};
+      const poll=()=>{const state=read();if(state.scoped&&state.pressed==="true")resolve(state);else if(Date.now()>=deadline)resolve(state);else setTimeout(poll,100);};
       poll();
     })`);
-    if (!selectionState.accountId || selectionState.accountId === "primary" || selectionState.pressed !== "true") {
+    if (!selectionState.scoped || selectionState.pressed !== "true") {
       throw new Error(`Secondary reset subscription did not remain selected: ${JSON.stringify(selectionState)}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.max(delayMs, 1_500)));
+    return;
+  }
+  if (action === "usage-select-with-reset") {
+    const selectionState = await window.webContents.executeJavaScript(`new Promise((resolve) => {
+      const read=()=>{const buttons=[...document.querySelectorAll('button[aria-pressed]')]
+        .filter(button=>/resets? (?:available|unavailable)/i.test(button.textContent??''));
+        const target=buttons.find(button=>/\\b[1-9]\\d* resets? available\\b/i.test(button.textContent??''));
+        return {buttons,target,pressed:target?.getAttribute('aria-pressed')??null};};
+      let state=read();
+      if(!state.target){resolve({found:false,pressed:null});return;}
+      state.target.click();
+      const deadline=Date.now()+4000;
+      const poll=()=>{state=read();if(state.pressed==="true")resolve({found:true,pressed:state.pressed});else if(Date.now()>=deadline)resolve({found:true,pressed:state.pressed});else setTimeout(poll,100);};
+      poll();
+    })`);
+    if (!selectionState.found || selectionState.pressed !== "true") {
+      throw new Error(`Available-reset subscription was not selected: ${JSON.stringify(selectionState)}`);
     }
     await new Promise((resolve) => setTimeout(resolve, Math.max(delayMs, 1_500)));
     return;
@@ -394,6 +414,7 @@ function start() {
 	  action !== "usage-confirm" &&
 	  action !== "usage-confirm-final" &&
 	  action !== "usage-select-second" &&
+	  action !== "usage-select-with-reset" &&
 	  action !== "appshots-open" &&
 	  action !== "appshots-hotkey" &&
 	  action !== "appshots-settings-trigger" &&

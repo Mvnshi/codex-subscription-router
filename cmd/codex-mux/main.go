@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -109,18 +110,47 @@ func run() error {
 		}()
 	}
 
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Buffer(make([]byte, 64*1024), 64*1024*1024)
-	for scanner.Scan() {
-		message, parseErr := protocol.Parse(scanner.Bytes())
-		if parseErr != nil {
-			fmt.Fprintf(os.Stderr, "codex-mux: ignore invalid client JSON: %v\n", parseErr)
-			continue
+	return serveClientMessages(
+		ctx,
+		os.Stdin,
+		multiplexer.HandleClient,
+		os.Stderr,
+	)
+}
+
+func serveClientMessages(
+	ctx context.Context,
+	input io.Reader,
+	handle func(protocol.Message),
+	diagnostics io.Writer,
+) error {
+	finished := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(input)
+		scanner.Buffer(make([]byte, 64*1024), 64*1024*1024)
+		for scanner.Scan() {
+			select {
+			case <-ctx.Done():
+				finished <- nil
+				return
+			default:
+			}
+			message, parseErr := protocol.Parse(scanner.Bytes())
+			if parseErr != nil {
+				fmt.Fprintf(diagnostics, "codex-mux: ignore invalid client JSON: %v\n", parseErr)
+				continue
+			}
+			handle(message)
 		}
-		multiplexer.HandleClient(message)
+		finished <- scanner.Err()
+	}()
+
+	select {
+	case err := <-finished:
+		return err
+	case <-ctx.Done():
+		return nil
 	}
-	cancel()
-	return scanner.Err()
 }
 
 func resolveRealExecutable() (string, error) {

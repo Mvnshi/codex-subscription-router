@@ -154,6 +154,21 @@ async function codexMuxRateLimitResets(accountId) {
   );
 }
 
+function codexMuxAvailableResetCount(resets) {
+  if (resets == null || typeof resets !== "object") return null;
+  const available = resets.available_count;
+  if (available != null) {
+    return Number.isSafeInteger(available) && available >= 0 ? available : null;
+  }
+  const applicable = resets.applicable_available_count;
+  if (applicable != null) {
+    return Number.isSafeInteger(applicable) && applicable >= 0
+      ? applicable
+      : null;
+  }
+  return null;
+}
+
 async function codexMuxConsumeRateLimitReset(accountId, input) {
   return codexMuxRequest(
     `/accounts/${encodeURIComponent(accountId)}/rate-limit-resets/consume`,
@@ -184,7 +199,14 @@ function CodexMuxUseResetAccountState() {
     (account) => account.connected && account.enabled,
   );
   const [accounts, setAccounts] = kXc.useState(cachedAccounts);
-  const [selectedId, setSelectedId] = kXc.useState("primary");
+  const [selectedId, setSelectedId] = kXc.useState(
+    () =>
+      cachedAccounts.find(
+        (account) => account.id === globalThis.__codexMuxResetAccountId,
+      )?.id ||
+      cachedAccounts[0]?.id ||
+      null,
+  );
   const [resetCounts, setResetCounts] = kXc.useState({});
   const [loading, setLoading] = kXc.useState(cachedAccounts.length === 0);
 
@@ -193,17 +215,23 @@ function CodexMuxUseResetAccountState() {
       (account) => account.connected && account.enabled,
     );
     setAccounts(connected);
-    setSelectedId((current) =>
-      connected.some((account) => account.id === current)
+    setSelectedId((current) => {
+      const next = connected.some((account) => account.id === current)
         ? current
-        : connected[0]?.id || "primary",
-    );
+        : connected[0]?.id || null;
+      if (next) {
+        globalThis.__codexMuxResetAccountId = next;
+      } else {
+        delete globalThis.__codexMuxResetAccountId;
+      }
+      return next;
+    });
     setLoading(false);
     const entries = await Promise.all(
       connected.map(async (account) => {
         try {
           const resets = await codexMuxRateLimitResets(account.id);
-          return [account.id, Math.max(0, resets.available_count || 0)];
+          return [account.id, codexMuxAvailableResetCount(resets)];
         } catch {
           return [account.id, null];
         }
@@ -227,8 +255,12 @@ function CodexMuxUseResetAccountState() {
 
   const selected =
     accounts.find((account) => account.id === selectedId) || accounts[0] || null;
-  const activeId = selected?.id || selectedId;
-  window.__codexMuxResetAccountId = activeId;
+  const activeId = selected?.id || null;
+  if (activeId) {
+    window.__codexMuxResetAccountId = activeId;
+  } else {
+    delete window.__codexMuxResetAccountId;
+  }
   window.__codexMuxSelectedUsageWindows = selected
     ? codexMuxUsageWindows(selected.rateLimits)
     : null;
@@ -239,7 +271,10 @@ function CodexMuxUseResetAccountState() {
       loading,
       resetCounts,
       selectedId: activeId,
-      onSelect: setSelectedId,
+      onSelect: (accountId) => {
+        window.__codexMuxResetAccountId = accountId;
+        setSelectedId(accountId);
+      },
     },
   );
 
@@ -511,6 +546,33 @@ function CodexMuxAccountMenu() {
             : account.label,
         },
         `codex-mux-account-${account.id}`,
+      ),
+    );
+  }
+
+  for (const account of accounts.filter(
+    (account) =>
+      !account.connected &&
+      typeof account.error === "string" &&
+      account.error.trim() !== "",
+  )) {
+    rows.push(
+      (0, e7.jsx)(
+        _H,
+        {
+          LeftIcon: (iconProps) =>
+            (0, e7.jsx)(CodexMuxAccountAvatar, {
+              ...iconProps,
+              imageUrl: account.profileImageUrl,
+              label: account.label,
+            }),
+          SubText: "Couldn’t refresh this subscription. Retrying automatically.",
+          tone: "danger",
+          allowWrap: true,
+          subTextAllowWrap: true,
+          children: `${account.label} · Reconnecting`,
+        },
+        `codex-mux-unavailable-${account.id}`,
       ),
     );
   }
@@ -887,7 +949,12 @@ function CodexMuxPluginScope() {
 // Export the same avatar component so both surfaces share image resolution,
 // error handling, and the initials fallback.
 globalThis.CodexMuxAccountAvatar = CodexMuxAccountAvatar;
+globalThis.codexMuxScopePluginRequest = codexMuxScopePluginRequest;
+globalThis.codexMuxFilterUsageStatus = codexMuxFilterUsageStatus;
 globalThis.codexMuxProfileData = codexMuxProfileData;
+globalThis.codexMuxRateLimitResets = codexMuxRateLimitResets;
+globalThis.codexMuxConsumeRateLimitReset = codexMuxConsumeRateLimitReset;
+globalThis.codexMuxAvailableResetCount = codexMuxAvailableResetCount;
 globalThis.CodexMuxProfileAvatarStack = (props) =>
   (0, e7.jsx)(CodexMuxProfileAvatarStack, props || {});
 globalThis.CodexMuxPluginScope = () =>

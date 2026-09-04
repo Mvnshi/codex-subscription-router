@@ -67,34 +67,53 @@ func (m *Multiplexer) Accounts(ctx context.Context) []AccountSnapshot {
 
 func (m *Multiplexer) accountSnapshots(ctx context.Context, includeProfile bool) []AccountSnapshot {
 	accounts := m.store.Accounts()
-	results := make(chan AccountSnapshot, len(accounts))
-	for _, account := range accounts {
-		go func(account state.Account) {
+	threadCounts := m.store.ThreadCounts()
+	sort.SliceStable(accounts, func(i, j int) bool {
+		if accounts[i].Controller != accounts[j].Controller {
+			return accounts[i].Controller
+		}
+		return accounts[i].CreatedAt < accounts[j].CreatedAt
+	})
+
+	type snapshotResult struct {
+		index    int
+		snapshot AccountSnapshot
+	}
+	results := make(chan snapshotResult, len(accounts))
+	snapshots := make([]AccountSnapshot, len(accounts))
+	completed := make([]bool, len(accounts))
+	for index, account := range accounts {
+		snapshots[index] = AccountSnapshot{
+			ID: account.ID, Label: account.Label, Enabled: account.Enabled,
+			Controller: account.Controller, CreatedAt: account.CreatedAt,
+			ThreadCount: threadCounts[account.ID],
+		}
+		go func(index int, account state.Account) {
 			snapshot, err := m.accountSnapshotWithProfile(ctx, account.ID, includeProfile)
 			if err != nil {
 				snapshot = AccountSnapshot{
 					ID: account.ID, Label: account.Label, Enabled: account.Enabled,
-					Controller: account.Controller, CreatedAt: account.CreatedAt, Error: err.Error(),
+					Controller: account.Controller, CreatedAt: account.CreatedAt,
+					ThreadCount: threadCounts[account.ID], Error: err.Error(),
 				}
 			}
-			results <- snapshot
-		}(account)
+			results <- snapshotResult{index: index, snapshot: snapshot}
+		}(index, account)
 	}
-	snapshots := make([]AccountSnapshot, 0, len(accounts))
 	for range accounts {
 		select {
-		case snapshot := <-results:
-			snapshots = append(snapshots, snapshot)
+		case result := <-results:
+			snapshots[result.index] = result.snapshot
+			completed[result.index] = true
 		case <-ctx.Done():
+			for index := range snapshots {
+				if !completed[index] {
+					snapshots[index].Error = ctx.Err().Error()
+				}
+			}
 			return snapshots
 		}
 	}
-	sort.SliceStable(snapshots, func(i, j int) bool {
-		if snapshots[i].Controller != snapshots[j].Controller {
-			return snapshots[i].Controller
-		}
-		return snapshots[i].CreatedAt < snapshots[j].CreatedAt
-	})
 	return snapshots
 }
 

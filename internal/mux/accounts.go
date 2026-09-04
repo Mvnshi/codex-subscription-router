@@ -191,7 +191,7 @@ func (m *Multiplexer) accountSnapshotWithProfile(ctx context.Context, accountID 
 		snapshot.PlanType = details.PlanType
 		snapshot.PlanLabel = planLabel(details.PlanType)
 		if includeProfile {
-			snapshot.ProfileImageURL = m.profileImageURL(ctx, account)
+			snapshot.ProfileImageURL = m.profileImageURLCachedOrSchedule(account)
 		}
 		if details.Type == "chatgpt" {
 			rateResponse, rateErr := child.Request(ctx, "account/rateLimits/read", nil)

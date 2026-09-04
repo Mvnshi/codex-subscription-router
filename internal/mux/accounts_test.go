@@ -1,9 +1,23 @@
 package mux
 
 import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/b-nnett/codex-subscription-router/internal/state"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
+}
 
 func TestPlanLabel(t *testing.T) {
 	tests := map[string]string{
@@ -22,6 +36,64 @@ func TestPlanLabel(t *testing.T) {
 			t.Errorf("planLabel(%q) = %q, want %q", planType, got, want)
 		}
 	}
+}
+
+func TestProfileImageLookupDoesNotBlockAccountSnapshot(t *testing.T) {
+	requestStarted := make(chan struct{}, 1)
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requestStarted <- struct{}{}
+		time.Sleep(150 * time.Millisecond)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"profile":{"profile_picture_url":"https://example.com/avatar.png"}}`)),
+			Request:    request,
+		}, nil
+	})}
+
+	codexHome := t.TempDir()
+	auth, err := json.Marshal(map[string]any{
+		"tokens": map[string]string{"access_token": "test-token", "account_id": "test-account"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), auth, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	multiplexer := &Multiplexer{
+		profileClient:   client,
+		profileEndpoint: "https://chatgpt.test/profile",
+		profileCache:    make(map[string]profileCacheEntry),
+		profilePending:  make(map[string]bool),
+		now:             time.Now,
+	}
+	account := state.Account{ID: "primary", CodexHome: codexHome}
+
+	startedAt := time.Now()
+	if imageURL := multiplexer.profileImageURLCachedOrSchedule(account); imageURL != "" {
+		t.Fatalf("first uncached lookup should return immediately, got %q", imageURL)
+	}
+	if elapsed := time.Since(startedAt); elapsed > 50*time.Millisecond {
+		t.Fatalf("uncached profile lookup blocked the account snapshot for %s", elapsed)
+	}
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("background profile request did not start")
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if imageURL := multiplexer.profileImageURLCachedOrSchedule(account); imageURL != "" {
+			if imageURL != "https://example.com/avatar.png" {
+				t.Fatalf("unexpected cached image URL %q", imageURL)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("background profile lookup did not populate the cache")
 }
 
 func TestLongestAndShortestWindowUsesQuotaDuration(t *testing.T) {

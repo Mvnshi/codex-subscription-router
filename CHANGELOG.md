@@ -15,6 +15,8 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Slow profile-photo requests no longer block the first subscription list from
+  showing connected accounts.
 - Profile menus now dismiss normally on outside clicks and Escape after an
   additional subscription sign-in.
 - Native usage surfaces (limit banner, sidebar usage alert, reset prompts)

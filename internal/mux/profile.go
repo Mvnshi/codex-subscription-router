@@ -40,7 +40,7 @@ type profileResponse struct {
 }
 
 func (m *Multiplexer) profileImageURL(ctx context.Context, account state.Account) string {
-	now := time.Now()
+	now := m.now()
 	m.profileMu.Lock()
 	cached, ok := m.profileCache[account.ID]
 	m.profileMu.Unlock()
@@ -51,7 +51,7 @@ func (m *Multiplexer) profileImageURL(ctx context.Context, account state.Account
 	imageURL, err := fetchProfileImageURL(
 		ctx,
 		m.profileClient,
-		profileURL,
+		m.profileEndpoint,
 		filepath.Join(account.CodexHome, "auth.json"),
 	)
 	if err != nil {
@@ -60,10 +60,39 @@ func (m *Multiplexer) profileImageURL(ctx context.Context, account state.Account
 	m.profileMu.Lock()
 	m.profileCache[account.ID] = profileCacheEntry{
 		imageURL:  imageURL,
-		expiresAt: now.Add(profileCacheTTL),
+		expiresAt: m.now().Add(profileCacheTTL),
 	}
 	m.profileMu.Unlock()
 	return imageURL
+}
+
+// profileImageURLCachedOrSchedule keeps the cosmetic profile lookup off the
+// subscription-list critical path. A slow ChatGPT profile endpoint must not
+// hide otherwise connected subscriptions from the account menu.
+func (m *Multiplexer) profileImageURLCachedOrSchedule(account state.Account) string {
+	now := m.now()
+	m.profileMu.Lock()
+	cached, ok := m.profileCache[account.ID]
+	if ok && now.Before(cached.expiresAt) {
+		m.profileMu.Unlock()
+		return cached.imageURL
+	}
+	if m.profilePending[account.ID] {
+		m.profileMu.Unlock()
+		return ""
+	}
+	m.profilePending[account.ID] = true
+	m.profileMu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = m.profileImageURL(ctx, account)
+		m.profileMu.Lock()
+		delete(m.profilePending, account.ID)
+		m.profileMu.Unlock()
+	}()
+	return ""
 }
 
 func fetchProfileImageURL(

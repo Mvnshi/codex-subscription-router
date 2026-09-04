@@ -75,10 +75,12 @@ type Multiplexer struct {
 	eventsMu sync.RWMutex
 	events   map[chan Event]struct{}
 
-	profileMu     sync.Mutex
-	profileClient *http.Client
-	profileCache  map[string]profileCacheEntry
-	now           func() time.Time
+	profileMu       sync.Mutex
+	profileClient   *http.Client
+	profileEndpoint string
+	profileCache    map[string]profileCacheEntry
+	profilePending  map[string]bool
+	now             func() time.Time
 
 	resetCreditsMu       sync.Mutex
 	resetCreditsCache    map[string]resetCreditsCacheEntry
@@ -106,8 +108,10 @@ func New(options Options) (*Multiplexer, error) {
 		externalRoutes:       make(map[string]externalRoute),
 		serverRoutes:         make(map[string]serverRequestRoute),
 		events:               make(map[chan Event]struct{}),
-		profileClient:        &http.Client{Timeout: 10 * time.Second},
+		profileClient:        &http.Client{Timeout: 15 * time.Second},
+		profileEndpoint:      profileURL,
 		profileCache:         make(map[string]profileCacheEntry),
+		profilePending:       make(map[string]bool),
 		now:                  time.Now,
 		resetCreditsCache:    make(map[string]resetCreditsCacheEntry),
 		resetCreditsEndpoint: rateLimitResetCreditsURL,

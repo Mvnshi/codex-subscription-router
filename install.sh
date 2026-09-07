@@ -2,8 +2,9 @@
 
 set -euo pipefail
 
-readonly REPOSITORY_URL="https://github.com/b-nnett/codex-subscription-router.git"
-readonly DEFAULT_SOURCE_DIR="${HOME}/.codex-subscription-router/source"
+readonly REPOSITORY_URL="https://github.com/Mvnshi/codex-subscription-router.git"
+readonly SOURCE_BRANCH="maintained"
+readonly DEFAULT_SOURCE_DIR="${HOME}/.codex-subscription-router-mvnshi/source"
 readonly SOURCE_DIR="${CODEX_SUBSCRIPTION_ROUTER_SOURCE_DIR:-${DEFAULT_SOURCE_DIR}}"
 readonly DESTINATION_APP="${HOME}/Applications/Codex Subscription Router.app"
 readonly DESTINATION_HELPER="${HOME}/Applications/Codex Subscription Router Computer Use.app"
@@ -74,17 +75,17 @@ resolve_source_dir() {
         if [ -n "$(git -C "${SOURCE_DIR}" status --porcelain)" ]; then
             fail "${SOURCE_DIR} has local changes; preserve or commit them before updating."
         fi
-        if [ "$(git -C "${SOURCE_DIR}" branch --show-current)" != "main" ]; then
-            fail "${SOURCE_DIR} is not on main; switch branches or set CODEX_SUBSCRIPTION_ROUTER_SOURCE_DIR."
+        if [ "$(git -C "${SOURCE_DIR}" branch --show-current)" != "${SOURCE_BRANCH}" ]; then
+            fail "${SOURCE_DIR} is not on ${SOURCE_BRANCH}; switch branches or set CODEX_SUBSCRIPTION_ROUTER_SOURCE_DIR."
         fi
         log "Updating source"
-        git -C "${SOURCE_DIR}" pull --ff-only origin main >&2
+        git -C "${SOURCE_DIR}" pull --ff-only origin "${SOURCE_BRANCH}" >&2
     elif [ -e "${SOURCE_DIR}" ]; then
         fail "${SOURCE_DIR} exists but is not a Git repository."
     else
         log "Downloading source"
         mkdir -p "$(dirname -- "${SOURCE_DIR}")"
-        git clone --depth 1 --branch main "${REPOSITORY_URL}" "${SOURCE_DIR}" >&2
+        git clone --depth 1 --branch "${SOURCE_BRANCH}" "${REPOSITORY_URL}" "${SOURCE_DIR}" >&2
     fi
     printf '%s\n' "${SOURCE_DIR}"
 }

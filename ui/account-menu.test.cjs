@@ -37,3 +37,18 @@ test("reset count falls back only when available_count is absent", () => {
   assert.equal(availableResetCount({ credits: [{ status: "available" }] }), null);
   assert.equal(availableResetCount(null), null);
 });
+
+test("plugin selection scopes both legacy renderer aliases and native RPC methods", () => {
+  globalThis.__codexMuxPluginAccountId = "secondary-test";
+  try {
+    for (const method of ["list-apps", "list-installed-apps", "read-apps", "list-mcp-server-status", "login-mcp-server", "app/list", "app/installed", "app/read", "mcpServerStatus/list", "mcpServer/oauth/login"]) {
+      const params = { cursor: null };
+      assert.deepEqual(globalThis.codexMuxScopePluginRequest(method, params), { cursor: null, codexMuxAccountId: "secondary-test" }, method);
+      assert.deepEqual(params, { cursor: null }, "input must not be mutated");
+    }
+    const turn = { threadId: "test-thread" };
+    assert.equal(globalThis.codexMuxScopePluginRequest("turn/start", turn), turn);
+  } finally {
+    delete globalThis.__codexMuxPluginAccountId;
+  }
+});

@@ -54,6 +54,12 @@ const CODEX_MUX_ACCOUNT_SCOPED_PLUGIN_METHODS = new Set([
   "read-apps",
   "list-mcp-server-status",
   "login-mcp-server",
+  // Newer desktop builds invoke this hook at the app-server RPC layer.
+  "app/list",
+  "app/installed",
+  "app/read",
+  "mcpServerStatus/list",
+  "mcpServer/oauth/login",
 ]);
 
 function codexMuxScopePluginRequest(method, params) {

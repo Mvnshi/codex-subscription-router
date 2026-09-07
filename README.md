@@ -1,4 +1,14 @@
-# Codex Subscription Router
+# Codex Subscription Router — maintained fork
+
+Maintained by [Mvnshi](https://github.com/Mvnshi), based on
+[b-nnett’s original project](https://github.com/b-nnett/codex-subscription-router).
+This branch incorporates community compatibility work with original authorship
+preserved. See [branch status and credits](docs/MAINTAINED.md).
+
+**Current boundary:** full-app build support is recorded through build **7746**.
+Build **8109** and mixed shell/runtime configurations are not supported releases
+of this branch. A visible model in an experimental local installation does not
+prove full desktop or cross-account compatibility.
 
 ![Multi-subscription account menu](screenshots/account-menu.png)
 
@@ -99,11 +109,11 @@ Run one command. It downloads or updates the source, installs the locked build
 dependency, creates the independently signed app, and launches it:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/b-nnett/codex-subscription-router/main/install.sh | /bin/bash
+curl -fsSL https://raw.githubusercontent.com/Mvnshi/codex-subscription-router/maintained/install.sh | /bin/bash
 ```
 
 The installer keeps its source checkout in
-`~/.codex-subscription-router/source`. On an existing installation it uses the
+`~/.codex-subscription-router-mvnshi/source`. On an existing installation it uses the
 same account state, creates a recoverable backup, and requires signing-team
 continuity so macOS privacy grants remain valid. It stops with a clear message
 instead of making a partial installation when a prerequisite or upstream
@@ -115,12 +125,12 @@ compatibility check fails.
 
 ### Install via prompt
 
-> Install Codex Subscription Router from `https://github.com/b-nnett/codex-subscription-router` on this Mac using the repository's supported one-command installer, without modifying the official ChatGPT app or deleting any existing router state. Verify the resulting app and Computer Use helper signatures, launch the app, and ask me only if a prerequisite or macOS permission requires interaction.
+> Install the maintained branch of Codex Subscription Router from `https://github.com/Mvnshi/codex-subscription-router/tree/maintained` on this Mac using the repository's supported one-command installer, without modifying the official ChatGPT app or deleting any existing router state. Verify the resulting app and Computer Use helper signatures, launch the app, and ask me only if a prerequisite or macOS permission requires interaction.
 
 ### Install from a clone
 
 ```sh
-git clone https://github.com/b-nnett/codex-subscription-router.git
+git clone --branch maintained https://github.com/Mvnshi/codex-subscription-router.git
 cd codex-subscription-router
 npm ci --ignore-scripts
 python3 scripts/patch_app.py

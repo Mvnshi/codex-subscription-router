@@ -1,6 +1,7 @@
-# Maintained branch
+# Maintained fork
 
-This is Mvnshi’s integration branch, not an official upstream release. The MIT
+This fork’s `main` is Mvnshi’s maintained development branch, not an official
+upstream release. The MIT
 license and original notices remain intact. The branch preserves contributor
 commits; integration does not transfer credit for their work to the maintainer.
 
@@ -30,7 +31,7 @@ the generated app and standalone Computer Use helper passed
 new build or exercise its full desktop/Computer Use matrix.
 
 The currently installed local mixed-runtime experiment is not the source of
-this maintained branch. A newer backend can expose Astra without making the
+this maintained fork. A newer backend can expose Astra without making the
 older renderer and thread-resume protocol compatible. No newer runtime is
 substituted by this installer.
 
@@ -47,7 +48,7 @@ substituted by this installer.
 
 ## Install and updates
 
-Use the command in the root README. It fetches this fork’s `maintained` branch
+Use the command in the root README. It fetches this fork’s `main` branch
 and uses a separate source checkout at `~/.codex-subscription-router-mvnshi/source`.
 It still installs the standard router app names and reuses existing router state.
 Installing replaces an existing router bundle with a recoverable backup; it

@@ -360,3 +360,135 @@ func TestRouteUrgencyFallsBackToWeeklyUtilization(t *testing.T) {
 		t.Fatalf("fallback should prefer the less-used account: less=%f more=%f", lessUsed, moreUsed)
 	}
 }
+
+func TestHasRoutableCapacityRejectsSpentShortWindow(t *testing.T) {
+	shortMinutes := int64(300)
+	weeklyMinutes := int64(10_080)
+	// The exact shape that routed work to an exhausted account: the five-hour
+	// window is spent while the weekly window still reads 17%.
+	limits := &RateLimits{
+		Primary: &RateLimitWindow{
+			UsedPercent: 100, WindowDurationMins: &shortMinutes,
+		},
+		Secondary: &RateLimitWindow{
+			UsedPercent: 17, WindowDurationMins: &weeklyMinutes,
+		},
+	}
+	if hasRoutableCapacity(limits) {
+		t.Fatal("an account whose short window is spent must not be routable")
+	}
+}
+
+func TestHasRoutableCapacityRejectsSpentWeeklyWindow(t *testing.T) {
+	shortMinutes := int64(300)
+	weeklyMinutes := int64(10_080)
+	limits := &RateLimits{
+		Primary: &RateLimitWindow{
+			UsedPercent: 4, WindowDurationMins: &shortMinutes,
+		},
+		Secondary: &RateLimitWindow{
+			UsedPercent: 100, WindowDurationMins: &weeklyMinutes,
+		},
+	}
+	if hasRoutableCapacity(limits) {
+		t.Fatal("an account whose weekly window is spent must not be routable")
+	}
+}
+
+func TestHasRoutableCapacityAcceptsHeadroomInEveryWindow(t *testing.T) {
+	shortMinutes := int64(300)
+	weeklyMinutes := int64(10_080)
+	limits := &RateLimits{
+		Primary: &RateLimitWindow{
+			UsedPercent: 2, WindowDurationMins: &shortMinutes,
+		},
+		Secondary: &RateLimitWindow{
+			UsedPercent: 39, WindowDurationMins: &weeklyMinutes,
+		},
+	}
+	if !hasRoutableCapacity(limits) {
+		t.Fatal("an account with headroom in both windows must stay routable")
+	}
+}
+
+func TestHasRoutableCapacityHandlesMissingLimits(t *testing.T) {
+	if !hasRoutableCapacity(nil) {
+		t.Fatal("an account with no reported limits must not be excluded")
+	}
+	if !hasRoutableCapacity(&RateLimits{}) {
+		t.Fatal("an account with no windows must not be excluded")
+	}
+}
+
+func TestAggregateRateLimitsReportsDepletionFromShortWindow(t *testing.T) {
+	shortMinutes := int64(300)
+	weeklyMinutes := int64(10_080)
+	// Both accounts have weekly headroom but neither can accept a request.
+	// Reporting the pool as available here is what let the UI claim capacity
+	// that no connected account actually had.
+	limits, err := aggregateRateLimits([]AccountSnapshot{
+		{
+			ID: "one", Enabled: true, Connected: true, AuthType: "chatgpt",
+			RateLimits: &RateLimits{
+				Primary: &RateLimitWindow{
+					UsedPercent: 100, WindowDurationMins: &shortMinutes,
+				},
+				Secondary: &RateLimitWindow{
+					UsedPercent: 17, WindowDurationMins: &weeklyMinutes,
+				},
+			},
+		},
+		{
+			ID: "two", Enabled: true, Connected: true, AuthType: "chatgpt",
+			RateLimits: &RateLimits{
+				Primary: &RateLimitWindow{
+					UsedPercent: 100, WindowDurationMins: &shortMinutes,
+				},
+				Secondary: &RateLimitWindow{
+					UsedPercent: 5, WindowDurationMins: &weeklyMinutes,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if limits.RateLimitReachedType != "rate_limit_reached" {
+		t.Fatalf("pool must report depletion when every short window is spent: %#v", limits)
+	}
+}
+
+func TestAggregateRateLimitsStaysAvailableOnShortWindowHeadroom(t *testing.T) {
+	shortMinutes := int64(300)
+	weeklyMinutes := int64(10_080)
+	limits, err := aggregateRateLimits([]AccountSnapshot{
+		{
+			ID: "spent", Enabled: true, Connected: true, AuthType: "chatgpt",
+			RateLimits: &RateLimits{
+				Primary: &RateLimitWindow{
+					UsedPercent: 100, WindowDurationMins: &shortMinutes,
+				},
+				Secondary: &RateLimitWindow{
+					UsedPercent: 17, WindowDurationMins: &weeklyMinutes,
+				},
+			},
+		},
+		{
+			ID: "fresh", Enabled: true, Connected: true, AuthType: "chatgpt",
+			RateLimits: &RateLimits{
+				Primary: &RateLimitWindow{
+					UsedPercent: 2, WindowDurationMins: &shortMinutes,
+				},
+				Secondary: &RateLimitWindow{
+					UsedPercent: 39, WindowDurationMins: &weeklyMinutes,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if limits.RateLimitReachedType != nil {
+		t.Fatalf("pool must stay available while one account can accept work: %#v", limits)
+	}
+}

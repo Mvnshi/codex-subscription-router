@@ -281,7 +281,7 @@ func (m *Multiplexer) chooseAccountExcluding(ctx context.Context, excluded map[s
 			continue
 		}
 		weekly, short := longestAndShortestWindow(snapshot.RateLimits)
-		if weekly != nil && weekly.UsedPercent >= 100 {
+		if !hasRoutableCapacity(snapshot.RateLimits) {
 			continue
 		}
 		weeklyUsed := 1_000.0
@@ -417,8 +417,7 @@ func aggregateRateLimits(snapshots []AccountSnapshot) (*RateLimits, error) {
 			primary = append(primary, snapshot.RateLimits.Primary)
 			secondary = append(secondary, snapshot.RateLimits.Secondary)
 		}
-		weekly, _ := longestAndShortestWindow(snapshot.RateLimits)
-		if weekly == nil || weekly.UsedPercent < 100 {
+		if hasRoutableCapacity(snapshot.RateLimits) {
 			hasCapacity = true
 		}
 	}
@@ -464,6 +463,23 @@ func averageRateLimitWindow(windows []*RateLimitWindow) *RateLimitWindow {
 		WindowDurationMins: longestDuration,
 		ResetsAt:           earliestReset,
 	}
+}
+
+// hasRoutableCapacity reports whether an account can still accept new work.
+//
+// ChatGPT enforces a short window (currently five hours) alongside the weekly
+// one, and exhausting either stops the account from accepting a request. Only
+// the longest window used to be checked, so an account whose short window was
+// spent still looked routable while its weekly figure was low, and new threads
+// were handed to an account that was already refusing them.
+func hasRoutableCapacity(limits *RateLimits) bool {
+	longest, shortest := longestAndShortestWindow(limits)
+	for _, window := range []*RateLimitWindow{longest, shortest} {
+		if window != nil && window.UsedPercent >= 100 {
+			return false
+		}
+	}
+	return true
 }
 
 func longestAndShortestWindow(limits *RateLimits) (*RateLimitWindow, *RateLimitWindow) {

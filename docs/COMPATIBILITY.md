@@ -11,6 +11,7 @@ stops instead of applying a partial patch.
 | `26.803.61601` | `6396` | `d5a44ed9e2f1db5f81dbbe85408aed256f3203c5b16f00817bb9d7cd941343cf` |
 | `26.810.52044` | `6662` | `6e7e8791b8bf69a586ff994721fff518af391d9efdc66cd2e620dd2a4aedc90f` |
 | `26.901.22334` | `7746` | `405f0e1600fc63851abe4c763ec0546f56c32da312c2c2745e2b997c579ce0d0` |
+| `26.901.51231` | `8109` | `64fc2f27d2dddfa968acfacbe5e4e0328071bdc406351ff4a7d18f0b4692c83d` |
 
 | Component | Tested value |
 | --- | --- |

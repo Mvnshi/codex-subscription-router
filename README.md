@@ -5,10 +5,13 @@ Maintained by [Mvnshi](https://github.com/Mvnshi), based on
 This branch incorporates community compatibility work with original authorship
 preserved. See [branch status and credits](docs/MAINTAINED.md).
 
-**Current boundary:** full-app build support is recorded through build **7746**.
-Build **8109** and mixed shell/runtime configurations are not supported releases
-of this branch. A visible model in an experimental local installation does not
-prove full desktop or cross-account compatibility.
+**Current boundary:** builds **6396** through **8109** patch, build and sign
+from the official app. Build **8109** is verified at build time only - it has
+not been launched or exercised for routing, failover or Computer Use, so treat
+it as provisional; see [the 8109 port notes](docs/BUILD-8109-PORT.md). Mixed
+shell/runtime configurations remain unsupported, and a visible model in an
+experimental local installation does not prove desktop or cross-account
+compatibility.
 
 ![Multi-subscription account menu](screenshots/account-menu.png)
 
@@ -83,7 +86,7 @@ Codex Subscription Router currently targets:
 | Component | Supported value |
 | --- | --- |
 | Platform | macOS on Apple silicon |
-| Official ChatGPT versions | `26.803.61601` (build `6396`), `26.810.52044` (build `6662`), `26.901.22334` (build `7746`) |
+| Official ChatGPT versions | `26.803.61601` (build `6396`), `26.810.52044` (build `6662`), `26.901.22334` (build `7746`), `26.901.51231` (build `8109`) |
 | Go | 1.26 or newer |
 | Node.js | 22.12 or newer |
 

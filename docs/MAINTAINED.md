@@ -30,6 +30,13 @@ the generated app and standalone Computer Use helper passed
 `codesign --verify --deep --strict`. This verification did not launch the
 new build or exercise its full desktop/Computer Use matrix.
 
+Build 8109 (`26.901.51231`) was ported the same day and now patches, builds
+and signs cleanly from the official app with no untested-source override; see
+[BUILD-8109-PORT.md](BUILD-8109-PORT.md) for every re-derived anchor and how it
+was validated. That verification is static and build-time only: the 8109 app
+has not been launched, signed into, or exercised for routing, failover, thread
+resume or Computer Use.
+
 The currently installed local mixed-runtime experiment is not the source of
 this maintained fork. A newer backend can expose Astra without making the
 older renderer and thread-resume protocol compatible. No newer runtime is
@@ -37,8 +44,9 @@ substituted by this installer.
 
 ## Next integration work
 
-1. Port and test the full 8109 desktop bundle, with exact source hashes and
-   anchor checks, rather than claiming compatibility from the model menu alone.
+1. Exercise the 8109 build at runtime: launch it, sign in, and test routing,
+   failover, thread resume and Computer Use. The patch and signature are
+   verified; the running behaviour is not.
 2. Evaluate [PR #23](https://github.com/b-nnett/codex-subscription-router/pull/23)
    separately: it changes thread storage and persistent indexes, so migration
    backup, resume, ownership and rollback need dedicated testing.

@@ -58,12 +58,17 @@ TESTED_SOURCE_BUILDS = {
         "26.901.22334",
         "7746",
     ): "405f0e1600fc63851abe4c763ec0546f56c32da312c2c2745e2b997c579ce0d0",
+    (
+        "26.901.51231",
+        "8109",
+    ): "64fc2f27d2dddfa968acfacbe5e4e0328071bdc406351ff4a7d18f0b4692c83d",
 }
 EXPECTED_CUA_IDENTIFIER_REPLACEMENTS = 49
 EXPECTED_CUA_IDENTIFIER_REPLACEMENTS_BY_BUILD = {
     ("26.803.61601", "6396"): 49,
     ("26.810.52044", "6662"): 99,
     ("26.901.22334", "7746"): 49,
+    ("26.901.51231", "8109"): 49,
 }
 DEFAULT_CUA_SERVICE_LAYOUT = (("Codex Computer Use.app", 17),)
 EXPECTED_CUA_SERVICE_LAYOUT_BY_BUILD = {
@@ -73,12 +78,14 @@ EXPECTED_CUA_SERVICE_LAYOUT_BY_BUILD = {
         ("bin/mac/normal/Codex Computer Use.app", 13),
     ),
     ("26.901.22334", "7746"): DEFAULT_CUA_SERVICE_LAYOUT,
+    ("26.901.51231", "8109"): DEFAULT_CUA_SERVICE_LAYOUT,
 }
 EXPECTED_ASAR_CUA_IDENTIFIER_REPLACEMENTS = 17
 EXPECTED_ASAR_CUA_IDENTIFIER_REPLACEMENTS_BY_BUILD = {
     ("26.803.61601", "6396"): 17,
     ("26.810.52044", "6662"): 20,
     ("26.901.22334", "7746"): 16,
+    ("26.901.51231", "8109"): 16,
 }
 
 
@@ -829,13 +836,41 @@ def ensure_asar_tool() -> Path:
     )["devDependencies"]["@electron/asar"]
     if not asar.exists() or not package_manifest.is_file():
         raise RuntimeError("run `npm ci --ignore-scripts` before patching")
-    actual = json.loads(package_manifest.read_text(encoding="utf-8")).get("version")
+    manifest = json.loads(package_manifest.read_text(encoding="utf-8"))
+    actual = manifest.get("version")
     if actual != expected:
         raise RuntimeError(
             f"installed @electron/asar is {actual!r}, expected {expected!r}; "
             "run `npm ci --ignore-scripts`"
         )
+    require_asar_node_runtime(manifest)
     return asar
+
+
+def require_asar_node_runtime(manifest: dict) -> None:
+    """Fail early when node is too old for the pinned asar, not mid-extract."""
+    required = str(manifest.get("engines", {}).get("node", "")).strip()
+    minimum = re.match(r">=\s*(\d+)\.(\d+)\.(\d+)", required)
+    if not minimum:
+        return
+    try:
+        reported = subprocess.run(
+            ["node", "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return
+    running = re.match(r"v?(\d+)\.(\d+)\.(\d+)", reported)
+    if not running:
+        return
+    if tuple(map(int, running.groups())) < tuple(map(int, minimum.groups())):
+        raise RuntimeError(
+            f"node {reported} is too old for @electron/asar {manifest.get('version')} "
+            f"(needs {required}); install a newer node, or select one with "
+            "`nvm use 22` (or later), and re-run"
+        )
 
 
 def replace_javascript_identifiers(source: str, replacements: dict[str, str]) -> str:
@@ -873,24 +908,42 @@ def patch_renderer(extracted: Path, token: str) -> None:
     bundle_path = initial_bundles[0]
     bundle = bundle_path.read_text(encoding="utf-8")
     primary_bundles = list((webview / "assets").glob("app-primary-*.js"))
-    primary_menu_marker = "function ign(e){let t=(0,Fq.c)(223),"
-    primary_menu_bundles = [
-        path
-        for path in primary_bundles
-        if primary_menu_marker in path.read_text(encoding="utf-8")
-    ]
-    build_7746 = len(primary_menu_bundles) == 1
-    if len(primary_menu_bundles) > 1:
+    primary_menu_marker_7746 = "function ign(e){let t=(0,Fq.c)(223),"
+    primary_menu_marker_8109 = "function Ymn(e){let t=(0,sY.c)(223),"
+    primary_texts = {
+        path: path.read_text(encoding="utf-8") for path in primary_bundles
+    }
+    menu_bundles_by_marker = {
+        marker: [path for path, text in primary_texts.items() if marker in text]
+        for marker in (primary_menu_marker_7746, primary_menu_marker_8109)
+    }
+    for marker, matches in menu_bundles_by_marker.items():
+        if len(matches) > 1:
+            raise RuntimeError(
+                "expected at most one ChatGPT primary renderer menu bundle, "
+                f"found {len(matches)}"
+            )
+    build_7746 = len(menu_bundles_by_marker[primary_menu_marker_7746]) == 1
+    build_8109 = len(menu_bundles_by_marker[primary_menu_marker_8109]) == 1
+    if build_7746 and build_8109:
         raise RuntimeError(
-            "expected at most one ChatGPT primary renderer menu bundle, "
-            f"found {len(primary_menu_bundles)}"
+            "the source app matched two different primary renderer menu layouts"
         )
-    menu_bundle_path = primary_menu_bundles[0] if build_7746 else bundle_path
+    # Builds 7746 and 8109 both carry the account menu in a separate
+    # app-primary bundle; older builds keep it in the initial bundle.
+    menu_in_primary = build_7746 or build_8109
+    primary_menu_marker = (
+        primary_menu_marker_8109 if build_8109 else primary_menu_marker_7746
+    )
+    primary_menu_bundles = menu_bundles_by_marker[primary_menu_marker]
+    menu_bundle_path = (
+        primary_menu_bundles[0] if menu_in_primary else bundle_path
+    )
     menu_bundle = (
-        menu_bundle_path.read_text(encoding="utf-8") if build_7746 else bundle
+        menu_bundle_path.read_text(encoding="utf-8") if menu_in_primary else bundle
     )
     if "function CodexMuxAccountMenu(" in bundle or (
-        build_7746 and "function CodexMuxAccountMenu(" in menu_bundle
+        menu_in_primary and "function CodexMuxAccountMenu(" in menu_bundle
     ):
         raise RuntimeError("source app already contains the Codex multiplexer menu")
 
@@ -898,7 +951,25 @@ def patch_renderer(extracted: Path, token: str) -> None:
     component = component.replace("__CODEX_MUX_CONTROL_PORT__", str(CONTROL_PORT))
     component = component.replace("__CODEX_MUX_CONTROL_TOKEN__", token)
     build_6662 = "function Icl(e){let t=(0,Vcl.c)(248)," in bundle
-    if build_7746:
+    if build_8109:
+        component = replace_javascript_identifiers(
+            component,
+            {
+                "e7": "cY",
+                "kXc": "ehn",
+                "Lo": "zx",
+                "Q": "qv",
+                "BW": "QC",
+                "QLs": "tq",
+                "_H": "xl",
+                "S2": "IE",
+                "CH": "Sy",
+                "jLa": "gV",
+                "lt": "Cx",
+            },
+        )
+        component_anchor = primary_menu_marker
+    elif build_7746:
         component = replace_javascript_identifiers(
             component,
             {
@@ -935,18 +1006,18 @@ def patch_renderer(extracted: Path, token: str) -> None:
         component_anchor = "function Icl(e){let t=(0,Vcl.c)(248),"
     else:
         component_anchor = "function wXc({sidebarFooter:e,triggerButton:t})"
-    component_bundle = menu_bundle if build_7746 else bundle
+    component_bundle = menu_bundle if menu_in_primary else bundle
     if component_bundle.count(component_anchor) != 1:
         raise RuntimeError("could not find the native ChatGPT profile menu component")
     component_bundle = component_bundle.replace(
         component_anchor, component + "\n" + component_anchor, 1
     )
-    if build_7746:
+    if menu_in_primary:
         menu_bundle = component_bundle
     else:
         bundle = component_bundle
 
-    if build_7746:
+    if menu_in_primary:
         plugin_rpc_literals = (
             ("sendRequest(`app/list`", 2),
             ("sendRequest(`app/installed`", 2),
@@ -961,12 +1032,14 @@ def patch_renderer(extracted: Path, token: str) -> None:
             raise RuntimeError(
                 "could not verify the native Plugins request-to-RPC mapping"
             )
+        # The plugin-list timeout constant is renamed between builds.
+        plugin_timeout_symbol = "TCn" if build_8109 else "vCn"
         app_server_request_anchor = (
             "async sendRequest(e,t,n){if(this.dispatchMessage==null)throw Error("
             "`AppServerRequestClient is missing a message dispatcher`);"
             "return e===`config/read`?this.sendConfigReadRequest(t,n):"
             "this.enqueueRequest(e,t,e===`plugin/list`&&n?.timeoutMs==null?"
-            "{...n,timeoutMs:vCn}:n)}"
+            f"{{...n,timeoutMs:{plugin_timeout_symbol}}}:n)}}"
         )
         app_server_request_replacement = (
             "async sendRequest(e,t,n){if(this.dispatchMessage==null)throw Error("
@@ -974,7 +1047,7 @@ def patch_renderer(extracted: Path, token: str) -> None:
             "let r=globalThis.codexMuxScopePluginRequest?.(e,t)??t;"
             "return e===`config/read`?this.sendConfigReadRequest(r,n):"
             "this.enqueueRequest(e,r,e===`plugin/list`&&n?.timeoutMs==null?"
-            "{...n,timeoutMs:vCn}:n)}"
+            f"{{...n,timeoutMs:{plugin_timeout_symbol}}}:n)}}"
         )
     else:
         rpc_wrapper = "J9" if build_6662 else "q9"
@@ -998,7 +1071,7 @@ def patch_renderer(extracted: Path, token: str) -> None:
                     "could not verify the native Plugins request-to-RPC mapping"
                 )
 
-    if build_6662 and not build_7746:
+    if build_6662 and not menu_in_primary:
         app_server_request_anchor = (
             "function Bp(e,t,n){return n==null?N8e.sendRequest(e,t):"
             "N8e.sendRequest(e,t,n)}"
@@ -1007,7 +1080,7 @@ def patch_renderer(extracted: Path, token: str) -> None:
             "function Bp(e,t,n){let r=codexMuxScopePluginRequest(e,t);"
             "return n==null?N8e.sendRequest(e,r):N8e.sendRequest(e,r,n)}"
         )
-    elif not build_7746:
+    elif not menu_in_primary:
         app_server_request_anchor = (
             "function gm(e,t,n){return n==null?h6e.sendRequest(e,t):"
             "h6e.sendRequest(e,t,n)}"
@@ -1024,7 +1097,7 @@ def patch_renderer(extracted: Path, token: str) -> None:
         1,
     )
 
-    if build_7746:
+    if menu_in_primary:
         usage_query_anchor = "return _lr(t,o),o"
         if bundle.count(usage_query_anchor) != 1:
             raise RuntimeError("could not find the native rate-limit status query")
@@ -1055,27 +1128,39 @@ def patch_renderer(extracted: Path, token: str) -> None:
         "let e=await c_.safeGet(`/wham/profiles/me`)"
         if build_6662
         else (
-            "async function Uzs(){let e=await AO.safeGet(`/wham/profiles/me`)"
-            if build_7746
-            else "let e=await T_.safeGet(`/wham/profiles/me`)"
+            "async function wBs(){let e=await _O.safeGet(`/wham/profiles/me`)"
+            if build_8109
+            else (
+                "async function Uzs(){let e=await AO.safeGet(`/wham/profiles/me`)"
+                if build_7746
+                else "let e=await T_.safeGet(`/wham/profiles/me`)"
+            )
         )
     )
     if bundle.count(profile_query_anchor) != 1:
         raise RuntimeError("could not find the native profile stats request")
-    profile_query_replacement = (
-        "async function Uzs(){let e=globalThis.codexMuxProfileData?await "
-        "globalThis.codexMuxProfileData("
-        "globalThis.__codexMuxSelectedProfileAccountId??null):"
-        "await AO.safeGet(`/wham/profiles/me`)"
-        if build_7746
-        else "let e=await codexMuxProfileData("
-        "globalThis.__codexMuxSelectedProfileAccountId??null)"
-    )
+    if menu_in_primary:
+        profile_query_fn = "wBs" if build_8109 else "Uzs"
+        profile_query_client = "_O" if build_8109 else "AO"
+        profile_query_replacement = (
+            f"async function {profile_query_fn}()"
+            "{let e=globalThis.codexMuxProfileData?await "
+            "globalThis.codexMuxProfileData("
+            "globalThis.__codexMuxSelectedProfileAccountId??null):"
+            f"await {profile_query_client}.safeGet(`/wham/profiles/me`)"
+        )
+    else:
+        profile_query_replacement = (
+            "let e=await codexMuxProfileData("
+            "globalThis.__codexMuxSelectedProfileAccountId??null)"
+        )
     bundle = bundle.replace(profile_query_anchor, profile_query_replacement, 1)
 
-    native_bundle = menu_bundle if build_7746 else bundle
+    native_bundle = menu_bundle if menu_in_primary else bundle
     native_usage_modal_name = (
-        "jG" if build_7746 else ("E$s" if build_6662 else "QLs")
+        "tq"
+        if build_8109
+        else ("jG" if build_7746 else ("E$s" if build_6662 else "QLs"))
     )
     native_usage_modal_anchor = f"function {native_usage_modal_name}(e){{"
     if native_bundle.count(native_usage_modal_anchor) != 1:
@@ -1086,7 +1171,22 @@ def patch_renderer(extracted: Path, token: str) -> None:
         1,
     )
 
-    if build_7746:
+    if build_8109:
+        reset_query_anchor = (
+            "function v2i(){let e=(0,VK.c)(1);WR(),Cb(null);let t;return "
+            "e[0]===Symbol.for(`react.memo_cache_sentinel`)?"
+            "(t={queryKey:[`rate-limit-reset-credits`],queryFn:b2i,select:y2i,"
+            "refetchInterval:lD.ONE_MINUTE,staleTime:lD.FIVE_SECONDS},e[0]=t):"
+            "t=e[0],Mb(t)}"
+        )
+        reset_query_replacement = (
+            "function v2i(){WR(),Cb(null);let e=window.__codexMuxResetAccountId;"
+            "return Mb({queryKey:[`rate-limit-reset-credits`,e??`primary`],"
+            "queryFn:e&&globalThis.codexMuxRateLimitResets?"
+            "()=>globalThis.codexMuxRateLimitResets(e):b2i,select:y2i,"
+            "refetchInterval:lD.ONE_MINUTE,staleTime:lD.FIVE_SECONDS})}"
+        )
+    elif build_7746:
         reset_query_anchor = (
             "function l2i(){let e=(0,RK.c)(1);HR(),lb(null);let t;return "
             "e[0]===Symbol.for(`react.memo_cache_sentinel`)?"
@@ -1137,7 +1237,27 @@ def patch_renderer(extracted: Path, token: str) -> None:
         1,
     )
 
-    if build_7746:
+    if build_8109:
+        reset_mutation_anchor = (
+            "function x2i(){let e=(0,VK.c)(3),t=Ob(),n=sD(),r;return "
+            "e[0]!==n||e[1]!==t?(r={mutationFn:S2i,onSuccess:(e,r)=>{"
+            "let{creditId:i}=r,a=e.code;if(a===`reset`||a===`already_redeemed`){"
+            "let n=e.code===`reset`?e.credit?.id??i:i;"
+            "t.setQueryData([`rate-limit-reset-credits`],e=>i0i(e,a,n))}"
+            "Promise.all([n([`rate-limit-status`]),n([`rate-limit-reset-credits`])])}},"
+            "e[0]=n,e[1]=t,e[2]=r):r=e[2],Fb(r)}"
+        )
+        reset_mutation_replacement = (
+            "function x2i(){let e=Ob(),t=sD(),n=window.__codexMuxResetAccountId,"
+            "r=[`rate-limit-reset-credits`,n??`primary`];return Fb({"
+            "mutationFn:n&&globalThis.codexMuxConsumeRateLimitReset?"
+            "i=>globalThis.codexMuxConsumeRateLimitReset(n,i):S2i,"
+            "onSuccess:(n,i)=>{let{creditId:a}=i,o=n.code;"
+            "if(o===`reset`||o===`already_redeemed`){let t=o===`reset`?"
+            "n.credit?.id??a:a;e.setQueryData(r,e=>i0i(e,o,t))}"
+            "Promise.all([t([`rate-limit-status`]),t(r)])}})}"
+        )
+    elif build_7746:
         reset_mutation_anchor = (
             "function f2i(){let e=(0,RK.c)(3),t=mb(),n=mD(),r;return "
             "e[0]!==n||e[1]!==t?(r={mutationFn:p2i,onSuccess:(e,r)=>{"
@@ -1212,7 +1332,16 @@ def patch_renderer(extracted: Path, token: str) -> None:
         1,
     )
 
-    if build_7746:
+    if build_8109:
+        usage_header_anchor = (
+            "let _e;t[46]===he?_e=t[47]:"
+            "(_e=(0,eq.jsxs)(mw,{children:[he,ge]}),t[46]=he,t[47]=_e);"
+        )
+        usage_header_replacement = (
+            "let _e=(0,eq.jsxs)(mw,{children:[he,ge,"
+            "window.__codexMuxResetAccountSelector??null]});"
+        )
+    elif build_7746:
         usage_header_anchor = (
             "let ge;t[46]===me?ge=t[47]:"
             "(ge=(0,AG.jsxs)(Gv,{children:[me,he]}),t[46]=me,t[47]=ge);"
@@ -1248,27 +1377,41 @@ def patch_renderer(extracted: Path, token: str) -> None:
     )
 
     usage_anchor = (
-        "usageItems:Tt"
-        if build_7746
-        else ("usageItems:Ct" if build_6662 else "usageItems:Ge")
+        "usageItems:Dt"
+        if build_8109
+        else (
+            "usageItems:Tt"
+            if build_7746
+            else ("usageItems:Ct" if build_6662 else "usageItems:Ge")
+        )
     )
     if native_bundle.count(usage_anchor) != 1:
         raise RuntimeError("could not find the native ChatGPT usage menu slot")
     native_bundle = native_bundle.replace(
         usage_anchor,
         (
-            "usageItems:(0,Iq.jsx)(CodexMuxAccountMenu,{})"
-            if build_7746
+            "usageItems:(0,cY.jsx)(CodexMuxAccountMenu,{})"
+            if build_8109
             else (
-                "usageItems:(0,$5.jsx)(CodexMuxAccountMenu,{})"
-                if build_6662
-                else "usageItems:(0,e7.jsx)(CodexMuxAccountMenu,{})"
+                "usageItems:(0,Iq.jsx)(CodexMuxAccountMenu,{})"
+                if build_7746
+                else (
+                    "usageItems:(0,$5.jsx)(CodexMuxAccountMenu,{})"
+                    if build_6662
+                    else "usageItems:(0,e7.jsx)(CodexMuxAccountMenu,{})"
+                )
             )
         ),
         1,
     )
 
-    if build_7746:
+    if build_8109:
+        open_change_anchors = (
+            "triggerButton:jt,onOpenChange:c,children:[F,null]",
+            "open:s,onOpenChange:c,contentWidth:`panel`,triggerButton:jt",
+        )
+        open_change_name = "c"
+    elif build_7746:
         open_change_anchors = (
             "triggerButton:kt,onOpenChange:c,children:[F,null]",
             "open:s,onOpenChange:c,contentWidth:`panel`,triggerButton:kt",
@@ -1312,12 +1455,12 @@ def patch_renderer(extracted: Path, token: str) -> None:
             "defaultMessage:`All connected subscriptions are depleted`",
             1,
         )
-    if build_7746:
+    if menu_in_primary:
         menu_bundle = native_bundle
     else:
         bundle = native_bundle
     bundle_path.write_text(bundle, encoding="utf-8")
-    if build_7746:
+    if menu_in_primary:
         menu_bundle_path.write_text(menu_bundle, encoding="utf-8")
 
     all_profile_bundles = list((webview / "assets").glob("profile-*.js"))
@@ -1325,11 +1468,14 @@ def patch_renderer(extracted: Path, token: str) -> None:
         [
             path
             for path in all_profile_bundles
-            if "avatar:(0,$.jsxs)($.Fragment,{children:["
-            "(0,$.jsxs)(`label`,{\"aria-disabled\":L.isPending"
+            if (
+                "avatar:(0,$.jsxs)($.Fragment,{children:["
+                "(0,$.jsxs)(`label`,{\"aria-disabled\":"
+                f"{'B' if build_8109 else 'L'}.isPending"
+            )
             in path.read_text(encoding="utf-8")
         ]
-        if build_7746
+        if menu_in_primary
         else all_profile_bundles
     )
     if len(profile_bundles) != 1:
@@ -1338,7 +1484,23 @@ def patch_renderer(extracted: Path, token: str) -> None:
         )
     profile_bundle_path = profile_bundles[0]
     profile_bundle = profile_bundle_path.read_text(encoding="utf-8")
-    if build_7746:
+    if build_8109:
+        profile_avatar_anchor = (
+            "avatar:(0,$.jsxs)($.Fragment,{children:["
+            "(0,$.jsxs)(`label`,{\"aria-disabled\":B.isPending,"
+            "className:gt(`group relative flex size-20 rounded-full outline-none "
+            "focus-within:ring-1 focus-within:ring-ring`,"
+        )
+        profile_avatar_replacement = (
+            "avatar:(0,$.jsxs)($.Fragment,{children:["
+            "globalThis.CodexMuxProfileAvatarStack?.("
+            "{onSelect:()=>M.refetch()})??null,"
+            "(0,$.jsxs)(`label`,{\"aria-disabled\":B.isPending,"
+            "className:gt(globalThis.CodexMuxProfileAvatarStack?`hidden`:"
+            "`group relative flex size-20 rounded-full outline-none "
+            "focus-within:ring-1 focus-within:ring-ring`,"
+        )
+    elif build_7746:
         profile_avatar_anchor = (
             "avatar:(0,$.jsxs)($.Fragment,{children:["
             "(0,$.jsxs)(`label`,{\"aria-disabled\":L.isPending,"
@@ -1391,7 +1553,10 @@ def patch_renderer(extracted: Path, token: str) -> None:
     )
 
     profile_name_anchor = (
-        "displayName:Re??(0,$.jsx)(J,{id:`profile.nameFallback`,"
+        "displayName:Je??(0,$.jsx)(W,{id:`profile.nameFallback`,"
+        "defaultMessage:`ChatGPT user`,description:`Fallback profile display name`})"
+        if build_8109
+        else "displayName:Re??(0,$.jsx)(J,{id:`profile.nameFallback`,"
         "defaultMessage:`ChatGPT user`,description:`Fallback profile display name`})"
         if build_7746
         else (
@@ -1407,6 +1572,11 @@ def patch_renderer(extracted: Path, token: str) -> None:
         profile_name_anchor,
         (
             "displayName:globalThis.__codexMuxSelectedProfileAccountId?"
+            "(Je??(0,$.jsx)(W,{id:`profile.nameFallback`,"
+            "defaultMessage:`ChatGPT user`,"
+            "description:`Fallback profile display name`})):null"
+            if build_8109
+            else "displayName:globalThis.__codexMuxSelectedProfileAccountId?"
             "(Re??(0,$.jsx)(J,{id:`profile.nameFallback`,"
             "defaultMessage:`ChatGPT user`,"
             "description:`Fallback profile display name`})):null"
@@ -1424,7 +1594,12 @@ def patch_renderer(extracted: Path, token: str) -> None:
         1,
     )
     profile_identity_anchor = (
-        "username:Ie==null?null:(0,$.jsx)(J,{id:`profile.usernameValue`,"
+        "username:qe==null?null:(0,$.jsx)(W,{id:`profile.usernameValue`,"
+        "defaultMessage:`@{username}`,"
+        "description:`Profile username shown with an at-sign prefix`,"
+        "values:{username:qe}})"
+        if build_8109
+        else "username:Ie==null?null:(0,$.jsx)(J,{id:`profile.usernameValue`,"
         "defaultMessage:`@{username}`,"
         "description:`Profile username shown with an at-sign prefix`,"
         "values:{username:Ie}})"
@@ -1444,7 +1619,13 @@ def patch_renderer(extracted: Path, token: str) -> None:
     profile_bundle = profile_bundle.replace(
         profile_identity_anchor,
         (
-            "username:globalThis.__codexMuxSelectedProfileAccountId&&Ie!=null?"
+            "username:globalThis.__codexMuxSelectedProfileAccountId&&qe!=null?"
+            "(0,$.jsx)(W,{id:`profile.usernameValue`,"
+            "defaultMessage:`@{username}`,"
+            "description:`Profile username shown with an at-sign prefix`,"
+            "values:{username:qe}}):null"
+            if build_8109
+            else "username:globalThis.__codexMuxSelectedProfileAccountId&&Ie!=null?"
             "(0,$.jsx)(J,{id:`profile.usernameValue`,"
             "defaultMessage:`@{username}`,"
             "description:`Profile username shown with an at-sign prefix`,"
@@ -1499,7 +1680,7 @@ def patch_renderer(extracted: Path, token: str) -> None:
 
     thread_component_anchor = (
         "function uT(e){let t=(0,pT.c)(43),"
-        if build_7746
+        if menu_in_primary
         else (
             "function bE(){let e=(0,SE.c)(1)"
             if build_6662
@@ -1524,7 +1705,7 @@ def patch_renderer(extracted: Path, token: str) -> None:
         "__CODEX_MUX_CONTROL_PORT__", str(CONTROL_PORT)
     )
     thread_component = thread_component.replace("__CODEX_MUX_CONTROL_TOKEN__", token)
-    if build_7746:
+    if menu_in_primary:
         thread_component = replace_javascript_identifiers(
             thread_component,
             {
@@ -1559,7 +1740,7 @@ def patch_renderer(extracted: Path, token: str) -> None:
     )
     summary_children_anchor = (
         "children:[d,f,p,m,h,g,_,v,y,b,x,S,C,w,T,E,D]"
-        if build_7746
+        if menu_in_primary
         else "children:[c,l,u,d,f,p,m,h,g,_,v,y,b,x]"
     )
     if thread_bundle.count(summary_children_anchor) != 1:
@@ -1568,7 +1749,7 @@ def patch_renderer(extracted: Path, token: str) -> None:
         "children:[d,f,p,m,h,g,_,v,y,b,x,S,(0,"
         f"{summary_component}.jsx)(CodexMuxThreadSubscription,{{}}),"
         "C,w,T,E,D]"
-        if build_7746
+        if menu_in_primary
         else "children:[c,l,u,d,f,(0,"
         f"{summary_component}.jsx)(CodexMuxThreadSubscription,{{}}),"
         "p,m,h,g,_,v,y,b,x]"

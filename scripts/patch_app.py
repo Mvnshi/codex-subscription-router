@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import struct
 import json
 import os
 import plistlib
@@ -260,6 +261,25 @@ def is_mach_o(path: Path) -> bool:
             return handle.read(4) in MACH_O_MAGICS
     except OSError:
         return False
+
+
+def asar_header_digest(path: Path) -> str:
+    """Hash what Electron actually validates: the asar header, not the file.
+
+    ElectronAsarIntegrity records the SHA-256 of the archive's header block.
+    Recording the whole-file digest silently passes until a build ships with
+    the embedded-asar-integrity fuse enabled, and then every launch aborts
+    with "Integrity check failed for asar archive".
+    """
+    with path.open("rb") as handle:
+        prefix = handle.read(16)
+        if len(prefix) != 16:
+            raise RuntimeError(f"not an asar archive: {path}")
+        _, _, _, header_size = struct.unpack("<IIII", prefix)
+        header = handle.read(header_size)
+    if len(header) != header_size:
+        raise RuntimeError(f"truncated asar header: {path}")
+    return hashlib.sha256(header).hexdigest()
 
 
 def arm64_swift_small_string(value: str) -> bytes:
@@ -1917,7 +1937,7 @@ def patch_info_plist(
         url_type["CFBundleURLSchemes"] = [
             "codex-subscription-router" if value == "codex" else value for value in schemes
         ]
-    digest = hashlib.sha256(asar_path.read_bytes()).hexdigest()
+    digest = asar_header_digest(asar_path)
     info["ElectronAsarIntegrity"] = {
         "Resources/app.asar": {"algorithm": "SHA256", "hash": digest}
     }

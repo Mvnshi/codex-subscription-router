@@ -33,9 +33,11 @@ new build or exercise its full desktop/Computer Use matrix.
 Build 8109 (`26.901.51231`) was ported the same day and now patches, builds
 and signs cleanly from the official app with no untested-source override; see
 [BUILD-8109-PORT.md](BUILD-8109-PORT.md) for every re-derived anchor and how it
-was validated. That verification is static and build-time only: the 8109 app
-has not been launched, signed into, or exercised for routing, failover, thread
-resume or Computer Use.
+was validated. Launching that build surfaced a real defect: the patcher recorded a whole-file
+asar digest where Electron validates the header digest. Harmless on earlier
+builds, fatal on 8109, which enables the integrity fuse. With that fixed the
+8109 build launches, loads every connected account, and offers GPT-6 Astra.
+Routing, failover, thread resume and Computer Use remain untested on 8109.
 
 The currently installed local mixed-runtime experiment is not the source of
 this maintained fork. A newer backend can expose Astra without making the
@@ -44,9 +46,9 @@ substituted by this installer.
 
 ## Next integration work
 
-1. Exercise the 8109 build at runtime: launch it, sign in, and test routing,
-   failover, thread resume and Computer Use. The patch and signature are
-   verified; the running behaviour is not.
+1. Exercise 8109 beyond launch: routing across accounts, failover when one is
+   exhausted, thread resume, and Computer Use. Launch, account load and model
+   availability are verified; multi-account behaviour is not.
 2. Evaluate [PR #23](https://github.com/b-nnett/codex-subscription-router/pull/23)
    separately: it changes thread storage and persistent indexes, so migration
    backup, resume, ownership and rollback need dedicated testing.

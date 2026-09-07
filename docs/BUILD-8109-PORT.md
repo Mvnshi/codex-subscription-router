@@ -82,11 +82,24 @@ depletion strings, with zero remaining `com.openai.sky.CUAService` references.
 Signing resolved team `CZWR4XCLQ7` rather than the `TNBQQS8Z3A` name suffix,
 which exercises the signing fix from upstream PR #25.
 
-## Not yet done
+## Asar integrity (found by launching the build)
 
-The build has **not** been launched, signed into, or exercised against a live
-account. Routing, failover, thread resume and the Computer Use matrix are
-untested on 8109. Do not describe 8109 as fully supported until that happens.
+The first 8109 install built and signed cleanly and then died on launch:
+
+    FATAL:asar_util.cc:143 Integrity check failed for asar archive
+
+`ElectronAsarIntegrity` records the SHA-256 of the archive's **header block**,
+not of the whole file. The patcher recorded the whole-file digest. That was
+already wrong for 6396/6662/7746 and simply never checked, because those builds
+ship with the embedded-asar-integrity fuse off. 8109 enables it, so the wrong
+value became fatal. `asar_header_digest` now reproduces the digest that both the
+official 7746 and 8109 bundles record.
+
+## Runtime state
+
+The 8109 build launches, loads all connected accounts through the control API,
+and the composer offers **GPT-6 Astra**. Still untested: routing across accounts,
+failover when one is exhausted, thread resume, and the Computer Use matrix.
 
 `@electron/asar` 4.2.1 requires node >= 22.12; the patcher now fails fast with
 an actionable message instead of aborting mid-extract.

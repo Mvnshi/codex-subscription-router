@@ -1,6 +1,10 @@
 """Signing regression tests; no signing certificate or macOS tools required."""
+import hashlib
+import struct
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import patch_app
@@ -132,6 +136,46 @@ class AsarNodeRuntimeTests(unittest.TestCase):
         with mock.patch.object(patch_app.subprocess, "run") as run:
             patch_app.require_asar_node_runtime({"version": "4.2.1"})
         run.assert_not_called()
+
+
+class AsarIntegrityTests(unittest.TestCase):
+    """ElectronAsarIntegrity records the header digest, not the file digest."""
+
+    def build_asar(self, header: bytes, payload: bytes) -> Path:
+        directory = tempfile.mkdtemp()
+        path = Path(directory) / "app.asar"
+        prefix = struct.pack("<IIII", 4, len(header) + 8, len(header) + 4, len(header))
+        path.write_bytes(prefix + header + payload)
+        return path
+
+    def test_digest_covers_the_header_only(self):
+        header = b'{"files":{"index.js":{"size":3,"offset":"0"}}}'
+        path = self.build_asar(header, b"abc")
+        self.assertEqual(
+            patch_app.asar_header_digest(path), hashlib.sha256(header).hexdigest()
+        )
+
+    def test_payload_changes_do_not_change_the_digest(self):
+        header = b'{"files":{"index.js":{"size":3,"offset":"0"}}}'
+        first = patch_app.asar_header_digest(self.build_asar(header, b"abc"))
+        second = patch_app.asar_header_digest(self.build_asar(header, b"xyz"))
+        self.assertEqual(first, second)
+
+    def test_whole_file_digest_is_not_used(self):
+        header = b'{"files":{}}'
+        payload = b"payload"
+        path = self.build_asar(header, payload)
+        self.assertNotEqual(
+            patch_app.asar_header_digest(path),
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+        )
+
+    def test_truncated_archive_is_rejected(self):
+        directory = tempfile.mkdtemp()
+        path = Path(directory) / "app.asar"
+        path.write_bytes(b"\x00\x01")
+        with self.assertRaises(RuntimeError):
+            patch_app.asar_header_digest(path)
 
 
 if __name__ == "__main__":

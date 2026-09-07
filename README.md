@@ -6,9 +6,9 @@ This branch incorporates community compatibility work with original authorship
 preserved. See [branch status and credits](docs/MAINTAINED.md).
 
 **Current boundary:** builds **6396** through **8109** patch, build and sign
-from the official app. Build **8109** is verified at build time only - it has
-not been launched or exercised for routing, failover or Computer Use, so treat
-it as provisional; see [the 8109 port notes](docs/BUILD-8109-PORT.md). Mixed
+from the official app. Build **8109** launches, loads connected accounts and offers GPT-6 Astra, but
+routing, failover and Computer Use are not yet exercised on it, so treat it as
+provisional; see [the 8109 port notes](docs/BUILD-8109-PORT.md). Mixed
 shell/runtime configurations remain unsupported, and a visible model in an
 experimental local installation does not prove desktop or cross-account
 compatibility.

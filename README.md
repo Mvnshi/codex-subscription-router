@@ -1,17 +1,13 @@
 # Codex Subscription Router — maintained fork
 
 Maintained by [Mvnshi](https://github.com/Mvnshi), based on
-[b-nnett’s original project](https://github.com/b-nnett/codex-subscription-router).
-This branch incorporates community compatibility work with original authorship
-preserved. See [branch status and credits](docs/MAINTAINED.md).
+[b-nnett's original project](https://github.com/b-nnett/codex-subscription-router),
+with community compatibility work and its original authorship preserved.
+See [branch status and credits](docs/MAINTAINED.md).
 
-**Current boundary:** builds **6396** through **8109** patch, build and sign
-from the official app. Build **8109** launches, loads connected accounts and offers GPT-6 Astra, but
-routing, failover and Computer Use are not yet exercised on it, so treat it as
-provisional; see [the 8109 port notes](docs/BUILD-8109-PORT.md). Mixed
-shell/runtime configurations remain unsupported, and a visible model in an
-experimental local installation does not prove desktop or cross-account
-compatibility.
+Supports official builds `6396` through `8109`. Build `8109` is provisional: it
+patches, signs, launches and loads connected accounts, but routing and failover
+have not been exercised on it. See [the 8109 port notes](docs/BUILD-8109-PORT.md).
 
 ![Multi-subscription account menu](screenshots/account-menu.png)
 

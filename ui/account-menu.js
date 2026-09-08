@@ -106,8 +106,8 @@ async function codexMuxFilterUsageStatus(status) {
   );
   if (pool.length < 2) return status;
   const poolHasCapacity = pool.some((account) => {
-    const weekly = codexMuxWeeklyWindow(account.rateLimits);
-    return weekly == null || weekly.usedPercent < 100;
+    const binding = codexMuxBindingWindow(account.rateLimits);
+    return binding == null || binding.usedPercent < 100;
   });
   const rateLimit = status.rate_limit;
   const pooledRateLimit =
@@ -428,14 +428,14 @@ function CodexMuxAccountMenu() {
   const connected = accounts.filter(
     (account) => account.connected && account.enabled,
   );
-  const weeklyWindows = connected.map((account) =>
-    codexMuxWeeklyWindow(account.rateLimits),
+  const bindingWindows = connected.map((account) =>
+    codexMuxBindingWindow(account.rateLimits),
   );
   const hasCompleteUsage =
-    connected.length > 0 && weeklyWindows.every((weekly) => weekly != null);
-  const totalRemaining = weeklyWindows.reduce(
-    (total, weekly) =>
-      total + (weekly == null ? 0 : Math.max(0, 100 - weekly.usedPercent)),
+    connected.length > 0 && bindingWindows.every((binding) => binding != null);
+  const totalRemaining = bindingWindows.reduce(
+    (total, binding) =>
+      total + (binding == null ? 0 : Math.max(0, 100 - binding.usedPercent)),
     0,
   );
 
@@ -527,8 +527,9 @@ function CodexMuxAccountMenu() {
   }
 
   for (const account of connected) {
-    const weekly = codexMuxWeeklyWindow(account.rateLimits);
-    const remaining = weekly == null ? null : Math.max(0, 100 - weekly.usedPercent);
+    const binding = codexMuxBindingWindow(account.rateLimits);
+    const remaining =
+      binding == null ? null : Math.max(0, 100 - binding.usedPercent);
     rows.push(
       (0, e7.jsx)(
         _H,
@@ -636,13 +637,16 @@ function CodexMuxAccountMenu() {
   return (0, e7.jsx)(e7.Fragment, { children: rows });
 }
 
-function codexMuxWeeklyWindow(rateLimits) {
+function codexMuxBindingWindow(rateLimits) {
+  // The window that actually stops a request, which is whichever is most
+  // spent - not the longest one. ChatGPT enforces a short window alongside
+  // the weekly one, so an account can sit at 68% weekly and still refuse
+  // every request because its five-hour window is gone.
   const windows = [rateLimits?.primary, rateLimits?.secondary].filter(Boolean);
-  windows.sort(
-    (left, right) =>
-      (left.windowDurationMins || 0) - (right.windowDurationMins || 0),
+  if (windows.length === 0) return null;
+  return windows.reduce((worst, entry) =>
+    entry.usedPercent > worst.usedPercent ? entry : worst,
   );
-  return windows.at(-1) || null;
 }
 
 function codexMuxUsageWindows(rateLimits) {
@@ -961,6 +965,7 @@ globalThis.codexMuxProfileData = codexMuxProfileData;
 globalThis.codexMuxRateLimitResets = codexMuxRateLimitResets;
 globalThis.codexMuxConsumeRateLimitReset = codexMuxConsumeRateLimitReset;
 globalThis.codexMuxAvailableResetCount = codexMuxAvailableResetCount;
+globalThis.codexMuxBindingWindow = codexMuxBindingWindow;
 globalThis.CodexMuxProfileAvatarStack = (props) =>
   (0, e7.jsx)(CodexMuxProfileAvatarStack, props || {});
 globalThis.CodexMuxPluginScope = () =>

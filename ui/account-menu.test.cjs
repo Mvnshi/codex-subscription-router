@@ -6,6 +6,7 @@ const test = require("node:test");
 require("./account-menu.js");
 
 const availableResetCount = globalThis.codexMuxAvailableResetCount;
+const bindingWindow = globalThis.codexMuxBindingWindow;
 
 test("reset count preserves an explicit available_count", () => {
   assert.equal(
@@ -51,4 +52,42 @@ test("plugin selection scopes both legacy renderer aliases and native RPC method
   } finally {
     delete globalThis.__codexMuxPluginAccountId;
   }
+});
+
+test("the reported window is the one that actually blocks a request", () => {
+  // The shape that showed "68%" next to an account that could not take a
+  // single request: its five-hour window was spent while the week was not.
+  const account = {
+    primary: { usedPercent: 100, windowDurationMins: 300 },
+    secondary: { usedPercent: 32, windowDurationMins: 10080 },
+  };
+  assert.equal(bindingWindow(account).usedPercent, 100);
+  assert.equal(bindingWindow(account).windowDurationMins, 300);
+});
+
+test("a spent week still binds when the short window is free", () => {
+  const account = {
+    primary: { usedPercent: 0, windowDurationMins: 300 },
+    secondary: { usedPercent: 100, windowDurationMins: 10080 },
+  };
+  assert.equal(bindingWindow(account).usedPercent, 100);
+  assert.equal(bindingWindow(account).windowDurationMins, 10080);
+});
+
+test("an account with headroom everywhere reports its worst window", () => {
+  const account = {
+    primary: { usedPercent: 0, windowDurationMins: 300 },
+    secondary: { usedPercent: 55, windowDurationMins: 10080 },
+  };
+  assert.equal(bindingWindow(account).usedPercent, 55);
+});
+
+test("missing windows do not invent a limit", () => {
+  assert.equal(bindingWindow(null), null);
+  assert.equal(bindingWindow({}), null);
+  assert.equal(
+    bindingWindow({ primary: { usedPercent: 12, windowDurationMins: 300 } })
+      .usedPercent,
+    12,
+  );
 });

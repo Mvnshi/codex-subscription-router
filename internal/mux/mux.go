@@ -67,6 +67,8 @@ type Multiplexer struct {
 
 	externalMu     sync.Mutex
 	externalRoutes map[string]externalRoute
+	inflightMu     sync.Mutex
+	inflightTurns  map[string]protocol.Message
 	serverMu       sync.Mutex
 	serverRoutes   map[string]serverRequestRoute
 	serverSequence atomic.Uint64
@@ -106,6 +108,7 @@ func New(options Options) (*Multiplexer, error) {
 		children:             make(map[string]*backend.Child),
 		inbound:              make(chan backend.Inbound, 1024),
 		externalRoutes:       make(map[string]externalRoute),
+		inflightTurns:        make(map[string]protocol.Message),
 		serverRoutes:         make(map[string]serverRequestRoute),
 		events:               make(map[chan Event]struct{}),
 		profileClient:        &http.Client{Timeout: 15 * time.Second},
@@ -289,6 +292,7 @@ func (m *Multiplexer) forwardWithExclusions(accountID string, message protocol.M
 	if !ok {
 		return fmt.Errorf("account %s is unavailable", accountID)
 	}
+	m.rememberInflightTurn(message)
 	key := protocol.RequestIDKey(message.ID)
 	m.externalMu.Lock()
 	m.externalRoutes[key] = externalRoute{
@@ -467,6 +471,16 @@ func (m *Multiplexer) handleInbound(inbound backend.Inbound) {
 	if message.Method == "account/rateLimits/updated" {
 		go m.forwardAggregatedRateLimitNotification(inbound.Raw)
 		return
+	}
+	if threadID, limited := usageLimitNotification(message); limited {
+		if m.failOverKilledTurn(threadID, inbound.AccountID) {
+			// The client must not see the usage limit or the turn ends in the
+			// UI even though the retry succeeds on another account.
+			return
+		}
+	}
+	if message.Method == "turn/completed" {
+		m.forgetInflightTurn(threadIDFromNotification(message.Params))
 	}
 	if message.Method == "thread/started" {
 		if threadID := threadIDFromNotification(message.Params); threadID != "" {

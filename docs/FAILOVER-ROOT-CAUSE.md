@@ -74,7 +74,32 @@ Then send a turn on an account that is already exhausted. The stall itself is
 the capture: the engine emits the `error` notification immediately, and the
 request costs nothing because the account is already refusing work.
 
-## Not yet done
+## The captured payload
 
-The `error` payload has not been captured yet, so no parsing is written against
-it. Capture one, then implement the four points above.
+    {"method":"error","params":{
+       "error":{"message":"You've hit your usage limit. ...",
+                "codexErrorInfo":"usageLimitExceeded",
+                "additionalDetails":null,"misalignment":null},
+       "willRetry":false,
+       "threadId":"01a080e7-a29e-73c2-a944-ba2f6eafa5a5",
+       "turnId":"01a080f0-e393-78a2-8132-eec70a63efa0"}}
+
+It carries the thread directly, so no per-account turn tracking is needed to
+identify the victim, and `codexErrorInfo` is machine readable. `willRetry`
+says whether the engine intends to recover by itself.
+
+## Fixed
+
+`usageLimitNotification` recognises this shape, ignores it when `willRetry` is
+true so the router never competes with the engine's own recovery, and falls
+back to a text match for builds that word the message differently.
+
+Because `turn/start` is answered long before the turn fails, the route that
+carried it is gone by the time it dies. `rememberInflightTurn` retains the
+`turn/start` per thread when it is forwarded, `turn/completed` forgets it, and
+the notification handler replays it on another account through the existing
+`failoverTurn`. The usage-limit error is withheld from the client while the
+retry is in flight, otherwise the UI ends the turn even when the retry
+succeeds.
+
+The response-path trigger is unchanged; both shapes now fail over.

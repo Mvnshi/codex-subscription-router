@@ -61,7 +61,20 @@ structurally unreachable for this shape.
    ends the turn even though the retry succeeds.
 4. Keep the existing response-path trigger. Both shapes should fail over.
 
+## Capturing the payload
+
+`CODEX_MUX_TRACE_FILE` appends the raw JSON of inbound messages whose method is
+listed in `CODEX_MUX_TRACE_METHODS` (comma separated, default `error`). Tracing
+is off unless the file is set, and it records only the methods asked for
+because payloads can quote model or user text.
+
+    CODEX_MUX_TRACE_FILE=/tmp/codex-mux-trace.jsonl open -a "Codex Subscription Router"
+
+Then send a turn on an account that is already exhausted. The stall itself is
+the capture: the engine emits the `error` notification immediately, and the
+request costs nothing because the account is already refusing work.
+
 ## Not yet done
 
-The payload of the `error` notification has not been captured, so no parsing
-has been written against it. Do not guess the schema; capture one first.
+The `error` payload has not been captured yet, so no parsing is written against
+it. Capture one, then implement the four points above.

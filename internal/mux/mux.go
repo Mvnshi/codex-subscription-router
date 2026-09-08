@@ -441,6 +441,7 @@ func (m *Multiplexer) inboundLoop(ctx context.Context) {
 
 func (m *Multiplexer) handleInbound(inbound backend.Inbound) {
 	message := inbound.Message
+	traceInboundMessage(inbound.AccountID, message.Method, inbound.Raw)
 	if message.Method == "" && len(message.ID) > 0 {
 		key := protocol.RequestIDKey(message.ID)
 		m.externalMu.Lock()

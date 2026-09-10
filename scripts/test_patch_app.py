@@ -4,7 +4,8 @@ import struct
 import subprocess
 import tempfile
 import unittest
-from pathlib import Path
+import os
+from pathlib import Path, PurePosixPath
 from unittest import mock
 
 import patch_app
@@ -178,8 +179,10 @@ class AsarIntegrityTests(unittest.TestCase):
             patch_app.asar_header_digest(path)
 
 
-COMPUTER_USE_APP = Path("/opt/tester/Applications/Codex Subscription Router Computer Use.app")
-STATE_ROOT = Path("/opt/tester/.codex-mux")
+# PurePosixPath keeps str() identical on every OS; a WindowsPath would render
+# these fixtures with backslashes and break the byte-for-byte expectations.
+COMPUTER_USE_APP = PurePosixPath("/opt/tester/Applications/Codex Subscription Router Computer Use.app")
+STATE_ROOT = PurePosixPath("/opt/tester/.codex-mux")
 PROFILE_CALL = (
     "Xe.app.setPath(`userData`,Qt({appDataPath:Xe.app.getPath(`appData`),"
     "buildFlavor:`prod`,env:process.env}))"
@@ -400,7 +403,9 @@ class GoBuildTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["cwd"], patch_app.PROJECT_ROOT)
         self.assertIsNone(run.call_args.kwargs["env"])
         self.assertTrue(run.call_args.kwargs["check"])
-        self.assertTrue(destination.stat().st_mode & 0o111)
+        if os.name == "posix":
+            # Windows reports an executable bit only for .exe/.bat/.cmd/.com names.
+            self.assertTrue(destination.stat().st_mode & 0o111)
 
     def test_cross_compile_sets_only_the_requested_variables(self):
         destination, call = self.build(

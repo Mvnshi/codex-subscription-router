@@ -73,7 +73,7 @@ has not been verified. The platform-specific pieces are:
 | Bundled Codex | `Contents/Resources/codex` becomes the mux; original parked as `codex.real` | the single `codex.exe` under the copy becomes the mux; original renamed `codex.real.exe` beside it. `resolveRealExecutable` tries `codex.real.exe` then `codex.real` on Windows, `codex.real` elsewhere; `CODEX_MUX_REAL_CODEX` overrides |
 | Asar integrity | `ElectronAsarIntegrity` in `Info.plist` | `INTEGRITY`/`ELECTRONASAR` resource in the Electron executable, rewritten by `scripts/win/set-asar-integrity.mjs`. Both record the header digest from `asar_header_digest` |
 | Child shutdown | `SIGINT` to each child | close the child's stdin, wait up to 2 s, then kill |
-| Mux shutdown signals | `SIGINT`, `SIGTERM` | `os.Interrupt` only |
+| Mux shutdown signals | `SIGINT`, `SIGTERM` | the same list; Go delivers Ctrl-C/Ctrl-Break as `os.Interrupt` and CTRL_CLOSE/LOGOFF/SHUTDOWN as `SIGTERM` |
 | Desktop profile | `~/Library/Application Support/Codex Subscription Router` | `%APPDATA%\Codex Subscription Router` |
 | State root | `~/.codex-mux` (`0700`) | `%USERPROFILE%\.codex-mux` (NTFS ACL set with `icacls`) |
 | Primary account | `~/.codex` | `%USERPROFILE%\.codex` |

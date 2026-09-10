@@ -1,6 +1,11 @@
 """Windows patcher tests; run on any OS, no Windows tools or official app required."""
+import contextlib
+import errno
+import io
 import json
 import os
+import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -760,6 +765,602 @@ class ArgumentTests(unittest.TestCase):
         with mock.patch.object(win.sys, "stderr") as stderr:
             self.assertEqual(win.main([]), 1)
         self.assertIn("patch failed", "".join(str(call.args[0]) for call in stderr.write.call_args_list))
+
+
+class HelperJsonTests(unittest.TestCase):
+    def test_helper_json_returns_whatever_json_value_the_helper_printed(self):
+        # exe-info prints an object, set-asar-integrity a list; the shape check
+        # is each caller's job, helper_json only guarantees valid JSON.
+        self.assertEqual(win.helper_json(subprocess.CompletedProcess([], 0, stdout="[1]"), "t"), [1])
+        self.assertEqual(win.helper_json(subprocess.CompletedProcess([], 0, stdout='{"a":1}'), "t"), {"a": 1})
+        with self.assertRaises(RuntimeError) as caught:
+            win.helper_json(subprocess.CompletedProcess([], 0, stdout=""), "probe")
+        self.assertIn("probe did not print JSON", str(caught.exception))
+
+    def test_exe_info_that_is_valid_json_but_not_an_object_is_a_patch_failure(self):
+        for stdout in ("[]", '"ChatGPT.exe"', "null", "1", '[{"versionInfo": {}}]'):
+            completed = subprocess.CompletedProcess([], 0, stdout=stdout, stderr="")
+            with self.subTest(stdout=stdout), \
+                 mock.patch.object(win.subprocess, "run", return_value=completed), \
+                 mock.patch.object(win.shutil, "which", return_value="/usr/bin/node"), \
+                 mock.patch.object(win.EXE_INFO_SCRIPT.__class__, "is_file", return_value=True), \
+                 self.assertRaises(RuntimeError) as caught:
+                win.exe_info(Path("/apps/ChatGPT/ChatGPT.exe"))
+            self.assertIn("exe-info did not return an object", str(caught.exception))
+
+    def test_set_asar_integrity_that_is_not_a_list_does_not_count_as_recorded(self):
+        entry = EXE_INFO["asarIntegrity"][0]
+        for stdout in ("{}", '"cd"', "null"):
+            completed = subprocess.CompletedProcess([], 0, stdout=stdout, stderr="")
+            with self.subTest(stdout=stdout), \
+                 mock.patch.object(win.subprocess, "run", return_value=completed), \
+                 mock.patch.object(win.shutil, "which", return_value="/usr/bin/node"), \
+                 mock.patch.object(win.SET_ASAR_INTEGRITY_SCRIPT.__class__, "is_file", return_value=True), \
+                 self.assertRaises(RuntimeError) as caught:
+                win.rewrite_asar_integrity(Path("/stage/ChatGPT.exe"), entry, "cd" * 32)
+            self.assertIn("did not record the new asar digest", str(caught.exception))
+
+
+class HelperDecodingTests(unittest.TestCase):
+    """run_helper decodes UTF-8; only the PowerShell caller tolerates other bytes."""
+
+    def test_run_helper_decodes_strictly_by_default(self):
+        completed = subprocess.CompletedProcess([], 0, stdout="{}", stderr="")
+        with mock.patch.object(win.subprocess, "run", return_value=completed) as run:
+            win.run_helper(["node", "x.mjs"], "probe")
+        self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
+        self.assertEqual(run.call_args.kwargs["errors"], "strict")
+        self.assertFalse(run.call_args.kwargs["check"])
+
+    def test_node_helpers_keep_the_strict_decoder(self):
+        completed = subprocess.CompletedProcess([], 0, stdout=json.dumps(EXE_INFO), stderr="")
+        with mock.patch.object(win.subprocess, "run", return_value=completed) as run, \
+             mock.patch.object(win.shutil, "which", return_value="/usr/bin/node"), \
+             mock.patch.object(win.EXE_INFO_SCRIPT.__class__, "is_file", return_value=True):
+            win.exe_info(Path("/apps/ChatGPT/ChatGPT.exe"))
+        self.assertEqual(run.call_args.kwargs["errors"], "strict")
+
+    def test_localized_powershell_failure_reaches_the_operator(self):
+        # Windows PowerShell 5.1 writes the OEM code page, so the decoder must
+        # be lenient for this caller; the text still has to be in the error.
+        completed = subprocess.CompletedProcess(
+            [], 1, stdout="", stderr="Get-CimInstance : Accès refusé\r\n"
+        )
+        with mock.patch.object(win.subprocess, "run", return_value=completed) as run, \
+             self.assertRaises(RuntimeError) as caught:
+            win.ensure_destination_processes_stopped(Path("/lad/Programs/Router"))
+        self.assertIn("Accès refusé", str(caught.exception))
+        self.assertIn("process check (Get-CimInstance) failed (exit 1)", str(caught.exception))
+        self.assertEqual(run.call_args.kwargs["errors"], "replace")
+        self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
+        self.assertEqual(run.call_args.args[0][0], "powershell")
+
+    def test_running_processes_are_named_with_the_destination(self):
+        completed = subprocess.CompletedProcess([], 0, stdout="1234\r\n5678\r\n", stderr="")
+        destination = Path("/lad/Programs/Router")
+        with mock.patch.object(win.subprocess, "run", return_value=completed), \
+             self.assertRaises(RuntimeError) as caught:
+            win.ensure_destination_processes_stopped(destination)
+        message = str(caught.exception)
+        self.assertIn("quit the running app", message)
+        self.assertIn("1234, 5678", message)
+        self.assertIn(str(destination), message)
+
+    def test_no_running_processes_returns_normally(self):
+        for stdout in ("", "\r\n", "\n\n"):
+            completed = subprocess.CompletedProcess([], 0, stdout=stdout, stderr="")
+            with self.subTest(stdout=stdout), \
+                 mock.patch.object(win.subprocess, "run", return_value=completed):
+                self.assertIsNone(win.ensure_destination_processes_stopped(Path("/lad/Programs/Router")))
+
+    def test_undecodable_bytes_are_replaced_not_fatal(self):
+        # A real child and a real pipe: these are the bytes code page 850 or
+        # 1252 emits for "Accès refusé", and they are not valid UTF-8. With
+        # errors="replace" the failure is still a RuntimeError main() reports;
+        # the strict default would surface UnicodeDecodeError instead.
+        program = "import sys; sys.stderr.buffer.write(b'Acc\\xe8s refus\\xe9'); sys.exit(1)"
+        command = [sys.executable, "-c", program]
+        with self.assertRaises(RuntimeError) as caught:
+            win.run_helper(command, "probe", errors="replace")
+        self.assertIn("probe failed (exit 1): Acc�s refus�", str(caught.exception))
+        with self.assertRaises(UnicodeDecodeError):
+            win.run_helper(command, "probe")
+
+
+class NotSameDevice(OSError):
+    """OSError as Windows raises it for a cross-volume rename.
+
+    On Windows the interpreter sets .winerror itself; POSIX hosts have no such
+    attribute, so the class supplies it and the errno is deliberately not
+    EXDEV to prove that the winerror alone selects the fallback.
+    """
+
+    winerror = win.ERROR_NOT_SAME_DEVICE
+
+
+class SwapIntoPlaceTests(unittest.TestCase):
+    """One backup move, one atomic rename, and a handler that only restores."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        programs = self.root / "Local" / "Programs"
+        self.destination = programs / "Codex Subscription Router"
+        self.stage = programs / ".codex-subscription-router-xxxxxxxx" / "Codex Subscription Router"
+        self.backup_directory = self.root / ".codex-mux" / "backups" / "20260101-000000"
+        self.app_backup = self.backup_directory / self.destination.name
+        make_app(self.stage, "ChatGPT.exe", "Codex Subscription Router.exe")
+        (self.stage / "marker").write_text("new", encoding="utf-8")
+
+    def install_previous_app(self):
+        make_app(self.destination, "ChatGPT.exe")
+        (self.destination / "marker").write_text("old", encoding="utf-8")
+        # patch_app creates the timestamped backup directory before the swap.
+        self.backup_directory.mkdir(parents=True)
+
+    @staticmethod
+    def failing_renames(failures: dict):
+        """Patch Path.rename to raise the given error for the given paths."""
+        real_rename = Path.rename
+
+        def rename(path, target):
+            error = failures.get(path)
+            if error is not None:
+                raise error
+            return real_rename(path, target)
+
+        return mock.patch.object(win.Path, "rename", rename)
+
+    def swap(self, had_app=True):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            win.swap_into_place(self.stage, self.destination, self.backup_directory, had_app)
+        return out.getvalue()
+
+    def test_happy_path_moves_the_backup_then_the_stage(self):
+        self.install_previous_app()
+        out = self.swap()
+        self.assertEqual((self.destination / "marker").read_text(encoding="utf-8"), "new")
+        self.assertTrue((self.destination / "Codex Subscription Router.exe").is_file())
+        self.assertEqual((self.app_backup / "marker").read_text(encoding="utf-8"), "old")
+        self.assertFalse(self.stage.exists())
+        self.assertFalse((self.backup_directory / "failed-install").exists())
+        self.assertIn(f"Existing copy moved to {self.app_backup}", out)
+
+    def test_first_install_has_nothing_to_back_up(self):
+        out = self.swap(had_app=False)
+        self.assertEqual((self.destination / "marker").read_text(encoding="utf-8"), "new")
+        self.assertFalse(self.stage.exists())
+        self.assertFalse(self.backup_directory.exists())
+        self.assertNotIn("Existing copy", out)
+
+    def test_failed_backup_move_leaves_the_previous_install_untouched(self):
+        # The macOS-derived handler moved the working install into
+        # failed-install here because destination.exists() was true.
+        self.install_previous_app()
+        locked = PermissionError(
+            errno.EACCES, "The process cannot access the file because it is being used by another process"
+        )
+        with self.failing_renames({self.destination: locked}), \
+             mock.patch.object(win.shutil, "move") as move, \
+             self.assertRaises(PermissionError) as caught:
+            self.swap()
+        self.assertIs(caught.exception, locked)
+        move.assert_not_called()
+        self.assertEqual((self.destination / "marker").read_text(encoding="utf-8"), "old")
+        self.assertTrue((self.destination / "ChatGPT.exe").is_file())
+        self.assertEqual(list(self.backup_directory.iterdir()), [])
+        self.assertFalse((self.backup_directory / "failed-install").exists())
+        # The staged copy is left for the temporary directory to discard.
+        self.assertEqual((self.stage / "marker").read_text(encoding="utf-8"), "new")
+
+    def test_failed_stage_rename_restores_the_backup(self):
+        self.install_previous_app()
+        locked = PermissionError(errno.EACCES, "Access is denied")
+        with self.failing_renames({self.stage: locked}), \
+             self.assertRaises(PermissionError) as caught:
+            self.swap()
+        self.assertIs(caught.exception, locked)
+        self.assertEqual((self.destination / "marker").read_text(encoding="utf-8"), "old")
+        self.assertFalse(self.app_backup.exists())
+        self.assertFalse((self.backup_directory / "failed-install").exists())
+        self.assertEqual((self.stage / "marker").read_text(encoding="utf-8"), "new")
+
+    def test_failed_first_install_leaves_no_destination_and_no_backup(self):
+        locked = PermissionError(errno.EACCES, "Access is denied")
+        with self.failing_renames({self.stage: locked}), self.assertRaises(PermissionError):
+            self.swap(had_app=False)
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(self.backup_directory.exists())
+        self.assertEqual((self.stage / "marker").read_text(encoding="utf-8"), "new")
+
+    def test_backup_move_falls_back_to_shutil_move_across_volumes(self):
+        for error in (
+            OSError(errno.EXDEV, "Invalid cross-device link"),
+            NotSameDevice(errno.EINVAL, "The system cannot move the file to a different disk drive"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                self.setUp()
+                self.install_previous_app()
+                with self.failing_renames({self.destination: error}), \
+                     mock.patch.object(win.shutil, "move", wraps=shutil.move) as move:
+                    self.swap()
+                move.assert_called_once_with(self.destination, self.app_backup)
+                self.assertEqual((self.destination / "marker").read_text(encoding="utf-8"), "new")
+                self.assertEqual((self.app_backup / "marker").read_text(encoding="utf-8"), "old")
+                self.assertFalse(self.stage.exists())
+
+    def test_cross_volume_backup_is_restored_the_same_way(self):
+        # Backup went to another volume, then the stage rename failed: the
+        # restore has to cross that volume too, so it must not be a bare rename.
+        self.install_previous_app()
+        cross = OSError(errno.EXDEV, "Invalid cross-device link")
+        locked = PermissionError(errno.EACCES, "Access is denied")
+        with self.failing_renames({self.destination: cross, self.app_backup: cross, self.stage: locked}), \
+             mock.patch.object(win.shutil, "move", wraps=shutil.move) as move, \
+             self.assertRaises(PermissionError) as caught:
+            self.swap()
+        self.assertIs(caught.exception, locked)
+        self.assertEqual(
+            [call.args for call in move.call_args_list],
+            [(self.destination, self.app_backup), (self.app_backup, self.destination)],
+        )
+        self.assertEqual((self.destination / "marker").read_text(encoding="utf-8"), "old")
+        self.assertFalse(self.app_backup.exists())
+
+    def test_move_directory_only_falls_back_for_cross_device_errors(self):
+        source = self.root / "a"
+        source.mkdir()
+        for error in (
+            PermissionError(errno.EACCES, "denied"),
+            FileNotFoundError(errno.ENOENT, "gone"),
+            OSError(errno.EBUSY, "busy"),
+        ):
+            with self.subTest(error=error), \
+                 self.failing_renames({source: error}), \
+                 mock.patch.object(win.shutil, "move") as move, \
+                 self.assertRaises(OSError) as caught:
+                win.move_directory(source, self.root / "b")
+            self.assertIs(caught.exception, error)
+            move.assert_not_called()
+        self.assertTrue(source.is_dir())
+
+
+class SourceSideLayoutTests(unittest.TestCase):
+    """The layout checks patch_app runs on the source hold for the staged copy."""
+
+    def test_layout_checks_give_the_same_relative_results_on_a_copy(self):
+        root = Path(tempfile.mkdtemp())
+        source = make_app(
+            root / "Local" / "Programs" / "ChatGPT",
+            "ChatGPT.exe",
+            unpacked={"@openai": {}, "better-sqlite3": {}, "node-pty": {}},
+        )
+        nested = source / "resources" / "app.asar.unpacked" / "node_modules" / "@openai" / "codex" / "bin"
+        nested.mkdir(parents=True)
+        (nested / "codex.exe").write_bytes(b"MZ codex")
+        copy = root / "Local" / "Programs" / ".codex-subscription-router-xxxxxxxx" / "Codex Subscription Router"
+        shutil.copytree(source, copy, symlinks=False)
+
+        self.assertEqual(win.unpack_globs(source), "node_modules/{@openai,better-sqlite3,node-pty}")
+        self.assertEqual(win.unpack_globs(source), win.unpack_globs(copy))
+        for override in (None, "resources/app.asar.unpacked/node_modules/@openai/codex/bin/codex.exe"):
+            with self.subTest(override=override):
+                source_codex = win.locate_codex_executable(source, override)
+                copy_codex = win.locate_codex_executable(copy, override)
+                self.assertEqual(source_codex.relative_to(source), copy_codex.relative_to(copy))
+                # The derivation patch_app uses instead of searching the stage.
+                self.assertEqual(copy / source_codex.relative_to(source), copy_codex)
+                self.assertTrue(copy_codex.is_file())
+        self.assertFalse(win.locate_codex_executable(source, None).with_name("codex.real.exe").exists())
+
+
+# --- hermetic orchestration of patch_app() -----------------------------------
+
+BOOTSTRAP_BUNDLE = (
+    "Xe.app.setPath(`userData`,Qt({appDataPath:Xe.app.getPath(`appData`),"
+    "buildFlavor:`prod`,env:process.env}));"
+    "await Up.initialize();let{runMainAppStartup:Rm}=1;"
+)
+UPDATER_BUNDLE = (
+    "initializeUpdater(){return this.options.enableUpdater?"
+    "(this.updaterInitialization??=this.initializeUpdaterOnce(),"
+    "this.updaterInitialization):Promise.resolve()}"
+)
+MAIN_BUNDLE = "e.app.setAsDefaultProtocolClient(`codex`);"
+REPACKED_HEADER = json.dumps({"files": {".vite": {"files": {}}}}).encode("utf-8")
+# asar_header_digest reads the fourth little-endian uint32 as the header length
+# and hashes that many following bytes; the other fields are pickle sizes.
+REPACKED_ASAR = (
+    struct.pack("<IIII", 4, len(REPACKED_HEADER) + 8, len(REPACKED_HEADER) + 4, len(REPACKED_HEADER))
+    + REPACKED_HEADER
+)
+
+
+class FakeTools:
+    """Stand-ins for go, node/asar, icacls and PowerShell that record every call.
+
+    Nothing here spawns a process or leaves the temporary tree: extract writes
+    the three bundles the shared patch steps anchor on, pack snapshots the
+    patched bundles and writes a minimal but valid asar, and the Go builds
+    write placeholder executables.
+    """
+
+    def __init__(self):
+        self.events: list = []
+        self.run_commands: list = []
+        self.subprocess_runs: list = []
+        self.builds: list = []
+        self.packed_bundles: dict = {}
+        self.unpack_dir = None
+
+    def record(self, name, function):
+        def wrapper(*args, **kwargs):
+            self.events.append((name, args[0] if args else None))
+            return function(*args, **kwargs)
+
+        return wrapper
+
+    def asar_command(self):
+        self.events.append(("asar_command", None))
+        return ["node", "asar.mjs"]
+
+    def asar_output(self, command):
+        self.run_commands.append(command)
+        return LISTING
+
+    def run(self, command, *, cwd=None, env=None):
+        self.run_commands.append(command)
+        if command[:3] == ["node", "asar.mjs", "extract"]:
+            build = Path(command[4]) / ".vite" / "build"
+            build.mkdir(parents=True)
+            (build / "bootstrap-a.js").write_text(BOOTSTRAP_BUNDLE, encoding="utf-8")
+            (build / "x.js").write_text(UPDATER_BUNDLE, encoding="utf-8")
+            (build / "main-a.js").write_text(MAIN_BUNDLE, encoding="utf-8")
+        elif command[:3] == ["node", "asar.mjs", "pack"]:
+            extracted, repacked = Path(command[-2]), Path(command[-1])
+            self.packed_bundles = {
+                entry.name: entry.read_text(encoding="utf-8")
+                for entry in (extracted / ".vite" / "build").iterdir()
+            }
+            if command[3] == "--unpack-dir":
+                self.unpack_dir = command[4]
+                native = repacked.parent / "app.asar.unpacked" / "node_modules" / "node-pty"
+                native.mkdir(parents=True)
+                (native / "pty.node").write_bytes(b"repacked native")
+            repacked.write_bytes(REPACKED_ASAR)
+        elif command[0] not in {"icacls", "powershell"}:
+            raise AssertionError(f"unexpected command: {command}")
+
+    def build_go_program(self, destination, package_path, *, goos=None, goarch=None, ldflags="-s -w"):
+        self.events.append(("build", package_path))
+        self.builds.append((destination, package_path, goos, goarch, ldflags))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"MZ built " + package_path.encode("utf-8"))
+
+    def subprocess_run(self, command, **kwargs):
+        self.subprocess_runs.append((command, kwargs))
+        if command[0] == "powershell":
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[1].endswith("exe-info.mjs"):
+            self.events.append(("exe-info", Path(command[2])))
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(EXE_INFO), stderr="")
+        if command[1].endswith("set-asar-integrity.mjs"):
+            entry = {"file": command[3], "alg": "SHA256", "value": command[4]}
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps([entry]), stderr="")
+        raise AssertionError(f"unexpected helper: {command}")
+
+
+def snapshot(root: Path) -> dict:
+    return {
+        str(entry.relative_to(root)): entry.read_bytes() if entry.is_file() else None
+        for entry in sorted(root.rglob("*"))
+    }
+
+
+class PatchAppOrchestrationTests(unittest.TestCase):
+    """patch_app() end to end with every external effect stubbed.
+
+    HOME/USERPROFILE/LOCALAPPDATA/APPDATA and the state root point into one
+    temporary tree; go, node, icacls, PowerShell and the registry are never
+    reached, and the source tree must be byte-identical afterwards.
+    """
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp()).resolve()
+        self.home = self.root / "home"
+        self.local = self.root / "Local"
+        self.appdata = self.root / "Roaming"
+        self.state_root = self.home / ".codex-mux"
+        for directory in (self.home, self.local, self.appdata):
+            directory.mkdir()
+        self.source = make_app(
+            self.local / "Programs" / "ChatGPT",
+            "ChatGPT.exe",
+            "Uninstall ChatGPT.exe",
+            unpacked={"@openai": {}, "node-pty": {}},
+        )
+        (self.source / "resources" / "app.asar").write_bytes(b"official asar")
+        self.codex_relative = Path("resources") / "app.asar.unpacked" / "node_modules" / "@openai" / "codex" / "bin" / "codex.exe"
+        (self.source / self.codex_relative).parent.mkdir(parents=True)
+        (self.source / self.codex_relative).write_bytes(b"MZ official codex")
+        self.destination = self.local / "Programs" / "Codex Subscription Router"
+        self.environment = {
+            "HOME": str(self.home),
+            "USERPROFILE": str(self.home),
+            "LOCALAPPDATA": str(self.local),
+            "APPDATA": str(self.appdata),
+            "ProgramFiles": str(self.root / "Program Files"),
+            "USERNAME": "me",
+            "USERDOMAIN": "PC",
+        }
+
+    def run_patch(self, *, force=False, create_shortcut=True, source=None, codex_executable=None):
+        tools = FakeTools()
+        before = snapshot(self.source)
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, self.environment), \
+             mock.patch.object(patch_app, "DEFAULT_STATE_ROOT", self.state_root), \
+             mock.patch.object(patch_app, "run", tools.run), \
+             mock.patch.object(patch_app, "build_go_program", tools.build_go_program), \
+             mock.patch.object(patch_app, "require_tool", tools.record("require_tool", lambda name: None)), \
+             mock.patch.object(patch_app, "patch_renderer") as patch_renderer, \
+             mock.patch.object(win, "asar_command", tools.asar_command), \
+             mock.patch.object(win, "asar_output", tools.asar_output), \
+             mock.patch.object(win, "node_executable", lambda: "node"), \
+             mock.patch.object(win, "long_paths_enabled", tools.record("long_paths_enabled", lambda: True)), \
+             mock.patch.object(win, "unpack_globs", tools.record("unpack_globs", win.unpack_globs)), \
+             mock.patch.object(
+                 win, "locate_codex_executable",
+                 tools.record("locate_codex_executable", win.locate_codex_executable),
+             ), \
+             mock.patch.object(win.subprocess, "run", tools.subprocess_run), \
+             mock.patch.object(win.sys, "platform", "win32"), \
+             contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            win.patch_app(source, None, force, True, None, codex_executable, create_shortcut)
+        self.assertEqual(snapshot(self.source), before, "the official install was modified")
+        tools.patch_renderer = patch_renderer
+        tools.stdout, tools.stderr = out.getvalue(), err.getvalue()
+        return tools
+
+    def assert_installed(self, tools):
+        destination = self.destination
+        self.assertTrue(destination.is_dir())
+        self.assertEqual((destination / "Codex Subscription Router.exe").read_bytes(), b"MZ built ./cmd/codex-router-launcher")
+        self.assertEqual((destination / "ChatGPT.exe").read_bytes(), b"MZ")
+        self.assertEqual((destination / "resources" / "app.asar").read_bytes(), REPACKED_ASAR)
+        self.assertEqual(
+            (destination / "resources" / "app.asar.unpacked" / "node_modules" / "node-pty" / "pty.node").read_bytes(),
+            b"repacked native",
+        )
+        self.assertEqual((destination / self.codex_relative).read_bytes(), b"MZ built ./cmd/codex-mux")
+        self.assertEqual(
+            (destination / self.codex_relative).with_name("codex.real.exe").read_bytes(), b"MZ official codex"
+        )
+        # No staging directory is left beside the destination.
+        self.assertEqual(
+            sorted(entry.name for entry in destination.parent.iterdir()),
+            ["ChatGPT", "Codex Subscription Router"],
+        )
+        # State root: the token, hardened through icacls, nothing else unexpected.
+        self.assertRegex((self.state_root / "control-token").read_text(encoding="utf-8"), r"^[0-9a-f]{64}$")
+        self.assertEqual(
+            tools.run_commands[:2], win.icacls_commands(self.state_root, "PC\\me")
+        )
+        # Builds: the mux into the temporary directory, the launcher into the stage.
+        (mux_path, mux_package, mux_goos, _, _), (launcher_path, launcher_package, launcher_goos, _, launcher_ldflags) = tools.builds
+        self.assertEqual((mux_package, mux_goos), ("./cmd/codex-mux", "windows"))
+        self.assertEqual(mux_path.name, "codex.exe")
+        self.assertTrue(mux_path.parent.name.startswith(win.STAGING_PREFIX))
+        self.assertEqual((launcher_package, launcher_goos), ("./cmd/codex-router-launcher", "windows"))
+        self.assertEqual(launcher_path.name, "Codex Subscription Router.exe")
+        self.assertEqual(launcher_ldflags, win.launcher_ldflags("ChatGPT.exe"))
+        # The shared patch steps ran on the extracted bundles before packing.
+        bootstrap = tools.packed_bundles["bootstrap-a.js"]
+        self.assertTrue(bootstrap.startswith(win.windows_desktop_profile_prelude()))
+        self.assertNotIn("Up.initialize()", bootstrap)
+        self.assertIn("setAsDefaultProtocolClient(`codex-subscription-router`)", tools.packed_bundles["main-a.js"])
+        self.assertIn("ui-test-bridge.cjs", tools.packed_bundles["main-a.js"])
+        self.assertIn("ui-test-bridge.cjs", tools.packed_bundles)
+        self.assertIn("disabled by Codex Subscription Router", tools.packed_bundles["x.js"])
+        self.assertEqual(tools.unpack_dir, "node_modules/{@openai,node-pty}")
+        token = (self.state_root / "control-token").read_text(encoding="utf-8")
+        tools.patch_renderer.assert_called_once()
+        self.assertEqual(tools.patch_renderer.call_args.args[1], token)
+        # Helpers: exe-info on the official executable, set-asar-integrity on
+        # the staged one with the repacked header digest.
+        helpers = [(command, kwargs) for command, kwargs in tools.subprocess_runs if command[0] == "node"]
+        (exe_info_command, exe_info_kwargs), (integrity_command, integrity_kwargs) = helpers
+        self.assertEqual(Path(exe_info_command[2]), self.source / "ChatGPT.exe")
+        self.assertEqual(exe_info_kwargs["errors"], "strict")
+        self.assertTrue(Path(integrity_command[2]).parent.parent.name.startswith(win.STAGING_PREFIX))
+        self.assertEqual(Path(integrity_command[2]).name, "ChatGPT.exe")
+        self.assertEqual(integrity_command[3], "resources\\app.asar")
+        self.assertEqual(integrity_command[4], patch_app.asar_header_digest(destination / "resources" / "app.asar"))
+        self.assertEqual(integrity_kwargs["errors"], "strict")
+        self.assertIn(f"Recorded asar header digest {integrity_command[4]}", tools.stdout)
+        self.assertIn("Retargeted 1 protocol-client registration(s)", tools.stdout)
+        self.assertIn("untested official ChatGPT build", tools.stderr)
+        self.assertTrue(tools.stdout.rstrip().endswith(
+            f"{destination}\n{destination / 'Codex Subscription Router.exe'}"
+        ))
+
+    def assert_source_checks_ran_before_the_copy(self, tools):
+        names = [name for name, _ in tools.events]
+        for check in ("unpack_globs", "locate_codex_executable", "asar_command"):
+            self.assertLess(names.index(check), names.index("exe-info"), names)
+            self.assertLess(names.index(check), names.index("build"), names)
+        self.assertLess(names.index("asar_command"), names.index("exe-info"), names)
+        self.assertEqual(names.count("unpack_globs"), 1)
+        self.assertEqual(names.count("locate_codex_executable"), 1)
+        arguments = dict(tools.events)
+        self.assertEqual(arguments["unpack_globs"], self.source)
+        self.assertEqual(arguments["locate_codex_executable"], self.source)
+
+    def test_first_install_discovers_the_source_and_creates_the_shortcut(self):
+        tools = self.run_patch()
+        self.assert_installed(tools)
+        self.assert_source_checks_ran_before_the_copy(tools)
+        self.assertFalse((self.state_root / "backups").exists())
+        self.assertEqual(sorted(entry.name for entry in self.state_root.iterdir()), ["control-token"])
+        self.assertFalse(any(command[0] == "powershell" for command, _ in tools.subprocess_runs))
+        shortcut_dir = self.appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+        self.assertTrue(shortcut_dir.is_dir())
+        shortcut_commands = [command for command in tools.run_commands if command[0] == "powershell"]
+        self.assertEqual(len(shortcut_commands), 1)
+        self.assertIn(str(self.destination / "Codex Subscription Router.exe"), shortcut_commands[0][4])
+        self.assertIn(str(shortcut_dir / "Codex Subscription Router.lnk"), shortcut_commands[0][4])
+        self.assertIn("Start menu shortcut:", tools.stdout)
+
+    def test_force_backs_up_the_previous_install_after_the_process_check(self):
+        make_app(self.destination, "ChatGPT.exe")
+        (self.destination / "marker").write_text("previous", encoding="utf-8")
+        tools = self.run_patch(force=True, create_shortcut=False)
+        self.assert_installed(tools)
+        self.assertFalse((self.destination / "marker").exists())
+        backups = sorted((self.state_root / "backups").iterdir())
+        self.assertEqual(len(backups), 1)
+        self.assertRegex(backups[0].name, r"^\d{8}-\d{6}$")
+        self.assertEqual(sorted(entry.name for entry in backups[0].iterdir()), ["Codex Subscription Router"])
+        self.assertEqual(
+            (backups[0] / "Codex Subscription Router" / "marker").read_text(encoding="utf-8"), "previous"
+        )
+        self.assertIn(f"Existing copy moved to {backups[0] / 'Codex Subscription Router'}", tools.stdout)
+        process_checks = [(command, kwargs) for command, kwargs in tools.subprocess_runs if command[0] == "powershell"]
+        self.assertEqual(len(process_checks), 1)
+        self.assertIn(str(self.destination) + "\\", process_checks[0][0][4])
+        self.assertEqual(process_checks[0][1]["errors"], "replace")
+        self.assertFalse(any(command[0] == "powershell" for command in tools.run_commands))
+        self.assertNotIn("Start menu shortcut", tools.stdout)
+
+    def test_existing_destination_without_force_stops_before_any_copy(self):
+        make_app(self.destination, "ChatGPT.exe")
+        (self.destination / "marker").write_text("previous", encoding="utf-8")
+        with self.assertRaises(RuntimeError) as caught:
+            self.run_patch()
+        self.assertIn("pass --force", str(caught.exception))
+        self.assertEqual((self.destination / "marker").read_text(encoding="utf-8"), "previous")
+        self.assertEqual(sorted(entry.name for entry in self.destination.parent.iterdir()), ["ChatGPT", "Codex Subscription Router"])
+        self.assertFalse((self.state_root / "backups").exists())
+
+    def test_unknown_source_layout_stops_before_tools_copy_or_builds(self):
+        # A parked codex.real.exe beside the bundled codex.exe is refused on the
+        # source itself, before go/node are probed or anything is written.
+        (self.source / self.codex_relative).with_name("codex.real.exe").write_bytes(b"MZ")
+        with self.assertRaises(RuntimeError) as caught:
+            tools = self.run_patch()
+        self.assertIn("already contains codex.real.exe", str(caught.exception))
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(self.state_root.exists())
+        self.assertEqual(sorted(entry.name for entry in self.local.joinpath("Programs").iterdir()), ["ChatGPT"])
+
+    def test_explicit_source_and_codex_override(self):
+        other = make_app(self.root / "elsewhere" / "ChatGPT", "ChatGPT.exe", unpacked={"@openai": {}, "node-pty": {}})
+        (other / "resources" / "app.asar").write_bytes(b"official asar")
+        (other / self.codex_relative).parent.mkdir(parents=True)
+        (other / self.codex_relative).write_bytes(b"MZ official codex")
+        self.source = other
+        tools = self.run_patch(source=other, codex_executable=self.codex_relative.as_posix())
+        self.assert_installed(tools)
+        self.assert_source_checks_ran_before_the_copy(tools)
 
 
 if __name__ == "__main__":

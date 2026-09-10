@@ -62,13 +62,18 @@ func run() error {
 	command := exec.Command(executable, arguments...)
 	command.Dir = filepath.Dir(resolvedPath)
 	command.Env = os.Environ()
-	// A -H=windowsgui process usually has no console, so these are nil or
-	// NULL handles; passing them through unchanged is what the child would
-	// get from Explorer anyway, and when started from a console with
-	// redirection the child inherits that instead. Only non-nil files are
-	// assigned: a typed-nil *os.File reaches CreateProcess as an invalid
-	// handle and makes the start fail, whereas leaving the field nil gives
-	// the child NUL, which is what a GUI app without a console expects.
+	// A -H=windowsgui process usually has no console, so os.Stdin/Stdout/
+	// Stderr wrap NULL handles; syscall.StartProcess skips those, and the
+	// child sees NULL std handles exactly as it would from Explorer. Started
+	// from a console with redirection, the child inherits that instead. The
+	// nil checks matter because os.Stdin/Stdout/Stderr are nil only when
+	// GetStdHandle itself failed, and assigning that typed-nil *os.File does
+	// NOT fail the start: its Fd() is syscall.InvalidHandle, StartProcess
+	// DuplicateHandle's every value > 0, and INVALID_HANDLE_VALUE (-1) is the
+	// current-process pseudo-handle, so Electron would quietly receive a
+	// handle to the launcher process as that std handle. Leaving the Cmd
+	// field nil instead makes os/exec open NUL for the child, which is what
+	// a GUI app without a console expects.
 	if os.Stdin != nil {
 		command.Stdin = os.Stdin
 	}

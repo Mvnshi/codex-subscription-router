@@ -20,6 +20,7 @@ import {
   machineName,
   normaliseAsarFileKey,
   normaliseDigest,
+  parseExecutable,
   ToolError,
   UsageError,
   updatedIntegrityList,
@@ -161,6 +162,9 @@ function expectFailure(script, args, status) {
   assert.equal(result.status, status, `stderr: ${result.stderr}`);
   assert.equal(result.stdout, "", "nothing but JSON on stdout, and only on success");
   assert.notEqual(result.stderr.trim(), "");
+  // Usage and tool errors are expected outcomes, not bugs: runCli prints a
+  // stack trace only for an exception it did not classify.
+  assert.doesNotMatch(result.stderr, /\n\s+at /, `an expected failure prints no stack trace: ${result.stderr}`);
   return result.stderr;
 }
 
@@ -219,6 +223,28 @@ test("only the matching entry changes and non-SHA256 entries are refused", () =>
     ToolError,
     "two entries matching one key is ambiguous",
   );
+});
+
+test("parseExecutable never reads past the end of a pooled Buffer", () => {
+  // pe-library bounds its reads against the underlying ArrayBuffer, not the
+  // view it is given. fs.readFileSync returns files under 4 KB as slices of
+  // Node's shared Buffer pool, so a truncated header that happens to sit in
+  // front of a complete PE in the same slab must still be rejected, not
+  // parsed from its neighbour's bytes. The PE comes from resedit itself, so
+  // this needs no go toolchain.
+  const whole = Buffer.from(NtExecutable.createEmpty(false, false).generate());
+  const slab = Buffer.alloc(8192);
+  whole.copy(slab, 8);
+  const truncated = slab.subarray(8, 8 + 64);
+  assert.equal(truncated.buffer, slab.buffer, "the view shares its slab, like a pooled Buffer");
+  assert.throws(
+    () => parseExecutable(truncated, "truncated.exe"),
+    (error) => error instanceof UsageError && /not a supported PE executable/.test(error.message),
+  );
+  // The same bytes with exact-size storage, as a whole file read has, parse
+  // in place: a Buffer that owns its ArrayBuffer is handed over uncopied.
+  assert.equal(whole.buffer.byteLength, whole.byteLength);
+  assert.equal(parseExecutable(whole, "whole.exe").exe.newHeader.fileHeader.machine, 0x8664);
 });
 
 test("writeFileAtomically leaves the target untouched when verify throws", () => {
@@ -295,16 +321,22 @@ test("exe-info describes a plain Go windowsgui build", { skip }, () => {
   });
 });
 
-test("exe-info usage errors exit 2 and print nothing to stdout", { skip }, () => {
-  expectFailure(EXE_INFO, [], 2);
-  expectFailure(EXE_INFO, [plainExe(), "extra"], 2);
-  expectFailure(EXE_INFO, [path.join(workspace, "missing.exe")], 2);
+// Usage errors need no compiled fixture, so they are NOT skipped without a go
+// toolchain: the exit-2 contract, the JSON-only-stdout guarantee and the
+// no-stack-trace rule are exercised on every `node --test` run.
+test("exe-info usage errors exit 2 and print nothing to stdout", () => {
+  assert.match(expectFailure(EXE_INFO, [], 2), /^exe-info: usage:/);
+  assert.match(expectFailure(EXE_INFO, [path.join(workspace, "missing.exe")], 2), /cannot read/);
   const text = freshPath("not-a-pe.exe");
   fs.writeFileSync(text, "MZ but not really a portable executable\n");
-  expectFailure(EXE_INFO, [text], 2);
+  assert.match(expectFailure(EXE_INFO, [text], 2), /not a supported PE executable/);
   const empty = freshPath("empty.exe");
   fs.writeFileSync(empty, "");
-  expectFailure(EXE_INFO, [empty], 2);
+  assert.match(expectFailure(EXE_INFO, [empty], 2), /not a PE executable \(no MZ header\)/);
+});
+
+test("exe-info rejects an extra argument even alongside a valid executable", { skip }, () => {
+  assert.match(expectFailure(EXE_INFO, [plainExe(), "extra"], 2), /^exe-info: usage:/);
 });
 
 test("set-asar-integrity exits 1 when the resource is absent", { skip }, () => {
@@ -400,18 +432,35 @@ test("set-asar-integrity lists the existing entries when no file matches", { ski
   assert.ok(before.equals(fs.readFileSync(file)), "input untouched");
 });
 
-test("set-asar-integrity usage errors exit 2", { skip }, () => {
+test("set-asar-integrity usage errors exit 2", () => {
+  // Arguments are validated before the executable is opened, so a path that
+  // does not exist stands in for a PE; the stderr match proves which check
+  // fired (usage text for argument errors, "cannot read" for the input).
+  const missing = path.join(workspace, "missing.exe");
+  const usage = /^set-asar-integrity: usage:/;
+  assert.match(expectFailure(SET_ASAR_INTEGRITY, [], 2), usage);
+  assert.match(expectFailure(SET_ASAR_INTEGRITY, [missing, APP_ASAR], 2), usage);
+  assert.match(expectFailure(SET_ASAR_INTEGRITY, [missing, APP_ASAR, NEW_DIGEST, "extra"], 2), usage);
+  assert.match(expectFailure(SET_ASAR_INTEGRITY, [missing, APP_ASAR, NEW_DIGEST, "--output"], 2), usage);
+  assert.match(expectFailure(SET_ASAR_INTEGRITY, [missing, APP_ASAR, NEW_DIGEST, "--output="], 2), usage);
+  assert.match(
+    expectFailure(SET_ASAR_INTEGRITY, [missing, APP_ASAR, NEW_DIGEST, "--bogus"], 2),
+    /unknown option --bogus/,
+  );
+  assert.match(expectFailure(SET_ASAR_INTEGRITY, [missing, APP_ASAR, NEW_DIGEST], 2), /cannot read/);
+  const text = freshPath("not-a-pe.exe");
+  fs.writeFileSync(text, "MZ but not really a portable executable\n");
+  assert.match(
+    expectFailure(SET_ASAR_INTEGRITY, [text, APP_ASAR, NEW_DIGEST], 2),
+    /not a supported PE executable/,
+  );
+});
+
+test("set-asar-integrity treats an unwritable --output as a usage error", { skip }, () => {
   const file = resourcedExe();
-  expectFailure(SET_ASAR_INTEGRITY, [], 2);
-  expectFailure(SET_ASAR_INTEGRITY, [file, APP_ASAR], 2);
-  expectFailure(SET_ASAR_INTEGRITY, [file, APP_ASAR, NEW_DIGEST, "extra"], 2);
-  expectFailure(SET_ASAR_INTEGRITY, [file, APP_ASAR, NEW_DIGEST, "--output"], 2);
-  expectFailure(SET_ASAR_INTEGRITY, [file, APP_ASAR, NEW_DIGEST, "--bogus"], 2);
-  expectFailure(SET_ASAR_INTEGRITY, [path.join(workspace, "missing.exe"), APP_ASAR, NEW_DIGEST], 2);
   const unwritable = path.join(workspace, "no-such-dir", "out.exe");
   const stderr = expectFailure(SET_ASAR_INTEGRITY, [file, APP_ASAR, NEW_DIGEST, "--output", unwritable], 2);
   assert.match(stderr, /cannot write/);
-  assert.doesNotMatch(stderr, /\n\s+at /, "a usage error prints no stack trace");
   assert.equal(exeInfo(file).asarIntegrity[0].value, OLD_APP_DIGEST, "input untouched");
 });
 

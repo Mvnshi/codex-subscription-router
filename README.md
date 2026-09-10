@@ -276,7 +276,8 @@ anything; `--source`, `--electron-executable`, and `--codex-executable`
 override its discovery when the official layout differs. The copy is unsigned
 because rewriting the executable's asar-integrity resource drops the
 Authenticode signature; SmartScreen may warn once. Rebuild with
-`python scripts\patch_app_windows.py --force`.
+`python scripts\patch_app_windows.py --force` (plus `--allow-untested-source`
+until a Windows build is recorded).
 
 ## Grant macOS permissions
 
@@ -415,8 +416,10 @@ python -m unittest discover -s scripts -p "test_*.py"
 python scripts/check_release.py
 ```
 
-`check:win`, the Windows PE helper tests, needs `go` on `PATH` on every OS.
-`check:shell` (`bash -n install.sh`) has no Windows equivalent; CI parses
+`check:win`, the Windows PE helper tests, skips its compiled-fixture cases
+with a printed reason when `go` is not on `PATH` (CI always has it), so run it
+with Go installed for a meaningful result. `check:shell` (`bash -n install.sh`)
+has no Windows equivalent; CI parses
 `install.ps1` with the PowerShell parser instead. CI runs a `macos` and a
 `windows` job. Deterministic UI preview routes are enabled only when
 `CODEX_MUX_UI_TESTS=1` is present at launch and remain token-authenticated.

@@ -1,6 +1,7 @@
 # Porting notes: Windows
 
-Status in one line: implemented and unit-tested on Linux and in CI; never
+Status in one line: implemented and unit-tested on Linux, with CI repeating
+the checks on macOS and Windows (the `macos` and `windows` jobs); never
 launched against an official Windows build of the ChatGPT desktop app.
 
 No official Windows build was available while this port was written. Every
@@ -14,8 +15,10 @@ layout is unknown, the patcher stops and names what it found.
 
 `scripts/patch_app.py` was split, byte-identically for macOS, into the pieces
 that are platform-neutral and the pieces that are macOS-only. The Python tests
-hold exact expectations (bundle contents, error messages, side-effect order)
-written against the pre-split code, and they pass unchanged after it.
+hold exact expectations (bundle contents, error messages, and the
+bootstrap-before-main patch order; the extracted tree is a
+`TemporaryDirectory` discarded on failure) written against the pre-split code,
+and they pass unchanged after it.
 `scripts/patch_app_windows.py` imports the neutral pieces and adds Windows
 equivalents for the rest. Each equivalent follows the rule the macOS anchors
 follow: an exact check with an exact expected count, and an error naming what
@@ -73,7 +76,9 @@ needs `--allow-untested-source` and prints the untested-build warning.
   `asar_header_digest` records the header digest Electron validates, as on
   macOS since build 8109.
 - **Token and backups.** `load_or_create_token` and the timestamped
-  `~/.codex-mux/backups/<timestamp>/` move with rollback are shared.
+  `~/.codex-mux/backups/<timestamp>/` backup location are shared; the move
+  itself and its rollback are per platform (`swap_into_place` on Windows,
+  step 15 below).
 
 ## What differs
 
@@ -81,13 +86,13 @@ needs `--allow-untested-source` and prints the untested-build warning.
 | --- | --- | --- |
 | Destination | `~/Applications/Codex Subscription Router.app` | `%LOCALAPPDATA%\Programs\Codex Subscription Router\`, a full copy of the official install directory |
 | Launcher | `native/launcher.c` compiled with `clang` into `Contents/MacOS/CodexSubscriptionRouterLauncher` | `cmd/codex-router-launcher` (Go) built as `Codex Subscription Router.exe` with `-trimpath -ldflags "-s -w -H=windowsgui -X main.electronExecutable=<name>"`; runs the sibling Electron executable with `--user-data-dir=%APPDATA%\Codex Subscription Router` first and its own arguments verbatim after, working directory its own, environment and stdio inherited, exit code passed through; any failure is shown in a `MessageBoxW` because `-H=windowsgui` hides the console |
-| Bundled Codex | `Contents/Resources/codex` → mux, original kept as `codex.real` | the single `codex.exe` found under the copy → mux, original renamed `codex.real.exe` in the same directory; the mux looks for `codex.real.exe`, then `codex.real` |
+| Bundled Codex | `Contents/Resources/codex` → mux, original kept as `codex.real` | the single `codex.exe` found under the copy → mux, original renamed `codex.real.exe` in the same directory; the mux looks for `codex.real.exe`, then `codex.real`. When `codex.exe` lives inside `app.asar.unpacked`, the repacked archive header keeps the official binary's recorded size and SHA-256 for that path and lists no `codex.real.exe`; harmless because Electron reads unpacked entries from disk without checking them, but the header is not a description of the installed binary |
 | Asar integrity | `ElectronAsarIntegrity` in `Info.plist` | `INTEGRITY`/`ELECTRONASAR` resource in the Electron executable (what Electron's `archive_win.cc` reads), rewritten with `scripts/win/set-asar-integrity.mjs` (resedit, `ignoreCert: true`); rewriting drops the Authenticode signature |
 | Signing | `codesign` under one Apple team, team continuity enforced | none; the copy runs unsigned and SmartScreen may warn |
-| Computer Use | helper re-identified, re-signed, managed service pinned | not patched; `SKY_CUA_SERVICE_NATIVE_PIPE_PATH` set to `\\.\pipe\codex-subscription-router-computer-use`, a name the official app never uses, and `CODEX_ELECTRON_SKIP_COMPUTER_USE_CANONICAL_REFRESH=1` |
+| Computer Use | helper re-identified, re-signed, managed service pinned | not patched; `SKY_CUA_SERVICE_NATIVE_PIPE_PATH` set to the prefix `\\.\pipe\codex-subscription-router-computer-use-` plus a `globalThis.crypto.randomUUID()` drawn on every launch (the Windows pipe namespace is machine-global, so a fixed name could be pre-created by any other local account and answered as a fake helper; the macOS socket gets that protection from the `0700` state root), and `CODEX_ELECTRON_SKIP_COMPUTER_USE_CANONICAL_REFRESH=1` |
 | Desktop profile | `~/Library/Application Support/Codex Subscription Router` | `%APPDATA%\Codex Subscription Router` |
-| State permissions | `0700` root, `0600` files | `icacls` at install time: inheritance removed, current user and SYSTEM only, inherited by files and directories created under the root later (a previous install moved into `backups\` keeps its own ACL); the mux's POSIX modes are no-ops beyond the read-only bit |
-| URL scheme | `CFBundleURLSchemes` edited in `Info.plist` | the literal `'codex'` in `setAsDefaultProtocolClient`, `removeAsDefaultProtocolClient`, and `isDefaultProtocolClient` calls in `.vite/build/*.js` becomes `'codex-subscription-router'`; zero matches is a warning, not an error, because the layout is unverified |
+| State permissions | `0700` root, `0600` files | `icacls` at install time: explicit ACEs on the root reset first, then inheritance removed, current user and SYSTEM only, inherited by files and directories created under the root later (a previous install renamed into `backups\` keeps its own ACL); the mux's POSIX modes are no-ops beyond the read-only bit |
+| URL scheme | `CFBundleURLSchemes` edited in `Info.plist` | the literal `'codex'` in `setAsDefaultProtocolClient`, `removeAsDefaultProtocolClient`, and `isDefaultProtocolClient` calls in `.vite/build/*.js` becomes `'codex-subscription-router'`; a `setAsDefaultProtocolClient` call whose scheme is not the literal `'codex'` (a variable, another literal, `.call`/`.apply`, an alias) stops the patch before the bundle is written, because the copy would register that scheme for itself under `HKCU\Software\Classes`; only the total absence of any such call is a warning |
 | Child shutdown | `SIGINT` to each child | close the child's stdin (the app-server exits on EOF), wait up to 2 s, then `Kill`; `os.Process.Signal(os.Interrupt)` is unsupported on Windows |
 | Mux shutdown signals | `SIGINT`, `SIGTERM` | the same list. Go's runtime delivers Ctrl-C and Ctrl-Break as `os.Interrupt` and CTRL_CLOSE, CTRL_LOGOFF and CTRL_SHUTDOWN console events as `SIGTERM`, so listing both keeps the deferred `multiplexer.Close()` running on logoff and shutdown; when the desktop app exits it closes stdin, which ends the mux on its own |
 | Unpacked native modules | hard-coded `ASAR_UNPACK_DIRECTORIES` | derived from the official `resources\app.asar.unpacked\node_modules`; every path the official archive kept unpacked must still be unpacked after repacking |
@@ -130,63 +135,78 @@ Every step stops the install on failure; the list is in execution order.
    `%ProgramFiles%\ChatGPT`, `%ProgramFiles%\Codex`. A candidate qualifies only
    if it is a directory containing `resources\app.asar`; exactly one must
    qualify, and the error lists what was examined. Any path containing a
-   `WindowsApps` component is refused as a Store/MSIX install.
+   `WindowsApps` component is refused as a Store/MSIX install. Source and
+   destination must differ and must not contain each other.
 2. **Electron executable.** `--electron-executable NAME` (a bare file name),
    otherwise exactly one top-level `.exe` after excluding `uninstall*`,
    `unins*`, `update.exe`, `squirrel*.exe`, `elevate.exe`, and the launcher's
    own name.
-3. **Executable facts.** `scripts/win/exe-info.mjs` parses the PE with
+3. **Source layout.** Everything that depends only on the source is checked
+   before any tool runs and before anything is copied or built, so an
+   unknown layout stops the run in seconds: the Electron executable name may
+   not contain whitespace or quotes, which the launcher's `-X` flag cannot
+   carry; the `--unpack-dir` pattern is derived from
+   `resources\app.asar.unpacked\node_modules` (anything other than
+   `node_modules` at the top level, no `node_modules`, or no packages is an
+   error); the bundled Codex is `--codex-executable RELPATH`, otherwise
+   exactly one file named `codex.exe` anywhere under the source; and
+   `codex.real.exe` must not already exist beside it.
+4. **Tools.** `go`, `node`, and `npm` on `PATH`; `node_modules/@electron/asar`
+   at the version `package.json` pins; a `node` new enough for it.
+5. **Executable facts.** `scripts/win/exe-info.mjs` parses the PE with
    `ignoreCert: true` and reports machine, subsystem, signature presence, the
    first `RT_VERSION` resource (first string table), and the
    `INTEGRITY`/`ELECTRONASAR` resource. A malformed resource, more than one
    language variant, or a non-`{file, alg, value}` list is an error, never
    reported as absent.
-4. **Identity.** `(ProductVersion, FileVersion)` and the whole-file
+6. **Identity.** `(ProductVersion, FileVersion)` and the whole-file
    `app.asar` SHA-256 are compared with `TESTED_WINDOWS_SOURCE_BUILDS`; a
    mismatch stops unless `--allow-untested-source` is passed, which prints a
    warning and continues only while every later anchor matches.
-5. **Tools.** `go`, `node`, and `npm` on `PATH`; `node_modules/@electron/asar`
-   at the version `package.json` pins; a `node` new enough for it.
-6. **State root.** `%USERPROFILE%\.codex-mux` is created with the control
-   token, then hardened with `icacls`; an `icacls` failure stops the install.
-7. **Destination.** Must not exist unless `--force`; with `--force`, no process
+7. **State root.** `%USERPROFILE%\.codex-mux` is created with the control
+   token, then hardened with `icacls` (explicit ACEs on the root reset, then
+   inheritance removed and only the current user and SYSTEM granted); an
+   `icacls` failure stops the install.
+8. **Destination.** Must not exist unless `--force`; with `--force`, no process
    may be running from it (`Get-CimInstance Win32_Process` executable-path
-   prefix). Source and destination must differ and must not contain each
-   other.
-8. **Path length.** The longest path under the source, projected onto the
+   prefix).
+9. **Path length.** The longest path under the source, projected onto the
    staging directory (`destination.parent\.codex-subscription-router-XXXXXXXX\…`)
    plus an eight-character margin, must stay below 260 unless
    `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled` reads
    as `1`; an unreadable value counts as disabled.
-9. **Build.** The source is copied to the staging directory; the mux is built
-   with `GOOS=windows` and the launcher with the flags above. The Electron
-   executable name may not contain whitespace or quotes, which `-X` cannot
-   carry.
-10. **Archive.** `asar list --is-pack` records the original packed/unpacked
+10. **Build.** The source is copied into the staging directory, a
+    `TemporaryDirectory` beside the destination that is discarded with
+    everything in it when any later step fails; the mux is built with
+    `GOOS=windows` and the launcher with the flags above.
+11. **Archive.** `asar list --is-pack` records the original packed/unpacked
     state; the archive is extracted; `isolate_desktop_profile` (Windows
-    prelude), `install_ui_test_bridge`, `retarget_protocol_scheme` (zero
-    matches warns), and `patch_renderer` run with their exact anchors.
-11. **Repack.** `--unpack-dir` is derived from
-    `resources\app.asar.unpacked\node_modules`: anything other than
-    `node_modules` at the top level, no `node_modules`, or no packages is an
-    error. After packing, every originally unpacked path must still be
-    unpacked, and the unpacked tree must exist exactly when a pattern was
-    given.
-12. **Bundled Codex.** `--codex-executable RELPATH`, otherwise exactly one
-    file named `codex.exe` anywhere under the copy. `codex.real.exe` must not
-    already exist; the original is renamed and the mux copied into place.
-13. **Integrity.** A `null` resource prints "no embedded asar integrity
+    prelude), `install_ui_test_bridge`, `retarget_protocol_scheme`, and
+    `patch_renderer` run with their exact anchors. `retarget_protocol_scheme`
+    fails closed: a `setAsDefaultProtocolClient` call whose scheme is not the
+    literal `'codex'` stops the patch before the bundle is written; only the
+    total absence of any such call warns.
+12. **Repack.** The archive is packed with the `--unpack-dir` pattern from
+    step 3. Afterwards every originally unpacked path must still be unpacked,
+    and the unpacked tree must exist exactly when a pattern was given.
+13. **Bundled Codex.** The `codex.exe` located in step 3 is renamed
+    `codex.real.exe` on the staged copy (its absence is re-checked there) and
+    the mux is copied into place.
+14. **Integrity.** A `null` resource prints "no embedded asar integrity
     resource" and rewrites nothing. A present resource must contain an entry
     for `resources\app.asar` (compared case-insensitively with either
     separator) with algorithm `SHA256`; its value becomes
     `asar_header_digest` of the repacked archive, written atomically to a
     temp file that is verified before and after the rename, and re-checked by
     the patcher from the tool's output.
-14. **Install.** An existing destination moves to
-    `%USERPROFILE%\.codex-mux\backups\<YYYYmmdd-HHMMSS>\`; the staged copy is
-    renamed into place; on failure the staged copy is parked under
-    `failed-install` and the backup restored.
-15. **Shortcut.** Best effort; a failure is a warning because the install is
+15. **Install.** An existing destination is moved to
+    `%USERPROFILE%\.codex-mux\backups\<YYYYmmdd-HHMMSS>\` (a rename on the
+    same volume; across volumes it falls back to a copying move), then the
+    staged copy is renamed into place with a single same-volume rename. If
+    either move fails, the previous install is left where it is or moved back
+    from the backup, and the staged copy is discarded with the temporary
+    directory; nothing is parked under a `failed-install` directory any more.
+16. **Shortcut.** Best effort; a failure is a warning because the install is
     already launchable.
 
 ## Unverified assumptions
@@ -203,6 +223,11 @@ Official app layout:
   `ChatGPT.exe`, and the bundled `codex.exe` exists exactly once under the
   install (for example under `resources\app.asar.unpacked`). Checked; both
   have overrides.
+- When `codex.exe` lives inside `app.asar.unpacked`, the repacked archive
+  header keeps the official binary's recorded size and SHA-256 for that path
+  and lists no `codex.real.exe`; harmless because Electron reads unpacked
+  entries from disk without checking them, but the header is not a
+  description of the installed binary. Not checkable by the patcher.
 - The Windows main-process bundles carry the macOS anchors: one
   `.vite/build/bootstrap-*.js` with the profile and updater patterns and one
   bundle with the `initializeUpdater` lifecycle. Windows builds usually update
@@ -212,7 +237,9 @@ Official app layout:
   entry points are not detectable and must be reviewed by hand.
 - Protocol registration uses `setAsDefaultProtocolClient` /
   `removeAsDefaultProtocolClient` / `isDefaultProtocolClient` with a literal
-  `'codex'` in `.vite/build/*.js`. Zero matches only warns.
+  `'codex'` in `.vite/build/*.js`. Checked: a `setAsDefaultProtocolClient`
+  call with any other scheme expression stops the patch; only the total
+  absence of such a call warns.
 - The renderer bundles match a macOS table (7746 or 8109). Checked.
 - `resources\app.asar.unpacked` contains only `node_modules` packages.
   Checked.
@@ -237,11 +264,10 @@ Run-time behaviour:
 - The Windows `codex.exe` app-server exits promptly on stdin EOF, as the
   macOS one does; hence the 2 s grace and kill backstop.
 - `pe-library` can parse the real executable. It refuses PEs with a COFF
-  symbol table and unusual resource layouts, and holds roughly three copies of
-  the file in memory per parse. `set-asar-integrity` parses the file three
-  times (input, temp file, final file), so budget about six times the
-  executable's size for it (measured on a 144 MB cross-compiled fixture:
-  `exe-info` 3.4×, `set-asar-integrity` 6.4×).
+  symbol table and unusual resource layouts. One parse holds the file buffer
+  plus pe-library's own copies of the sections; `set-asar-integrity` parses
+  the input, the temp file, and the final file in turn, so budget several
+  times the executable's size for it.
 - `fs.renameSync` over the existing `.exe` succeeds (`MoveFileEx` with
   replace); it fails, leaving the target untouched, if the file is locked.
 - Electron compares the stored `file` key against the archive path relative
@@ -264,8 +290,11 @@ Run-time behaviour:
   `ExecutablePath` for the user's own processes.
 - `winreg` can read `LongPathsEnabled`, and the Python interpreter is
   long-path aware (python.org builds are).
-- The backup rename stays on one volume; a destination on another drive would
-  take the rollback path.
+- The backup move is a rename when `%USERPROFILE%\.codex-mux` and the
+  destination share a volume; across volumes (a `--destination` on another
+  drive, a relocated profile) it falls back to a copying move, which is not
+  atomic. The staged copy's final rename never crosses volumes because the
+  staging directory is created beside the destination.
 - `GOARCH` is the host toolchain's default, not derived from the executable's
   machine type. An arm64 Windows host running an x64 official app gets an
   arm64 mux and launcher, which should run but is unexercised.
@@ -282,11 +311,17 @@ Installer and tooling:
 
 - `install.ps1` was validated with PowerShell 7.4 on Linux; Windows PowerShell
   5.1 behaviour is inferred (no 7-only syntax, no embedded quotes in native
-  arguments, no stderr redirection under `Stop`, `Get-Variable` guards for
-  `$IsLinux`/`$IsMacOS`, ASCII-only file).
+  arguments, `Get-Variable` guards for `$IsLinux`/`$IsMacOS`, ASCII-only
+  file). `Invoke-NativeCommand` and `Get-NativeOutput` run every native
+  command with a function-local `$ErrorActionPreference = 'Continue'` and no
+  stderr redirection, so 5.1 cannot turn a stderr line into a terminating
+  error; they clear `$global:LASTEXITCODE` before each call and fail closed
+  when it is still null afterwards (the command never ran).
 - `Get-Command -CommandType Application` resolves `npm.cmd`, `py.exe`, and
-  `git.exe`; `& npm` propagates its exit code; the Microsoft Store `python.exe`
-  placeholder exits non-zero so the fallback to `py -3` engages.
+  `git.exe`; npm is run through that resolved `npm.cmd` path, because a bare
+  `npm` would resolve to `npm.ps1`, which Windows PowerShell 5.1's default
+  execution policy refuses; the Microsoft Store `python.exe` placeholder exits
+  non-zero so the fallback to `py -3` engages.
 - `Stop-Process -Force` releases file locks within the ten-second window so
   `--force` can move the old copy.
 - The `windows` CI job relies on `windows-latest` providing `python` on `PATH`
@@ -355,25 +390,31 @@ Work on a copy; never edit the official installation.
   and `-X` override, passthrough order, error cases) and the real-executable
   lookup on Windows and macOS; `GOOS=windows GOARCH=amd64 go build ./...` and
   the arm64 equivalent must succeed.
-- Node: `node --test "scripts/win/*.test.mjs"` (18 tests) cross-compiles a real
-  PE32+ fixture with Go, adds packager-style `INTEGRITY` and `RT_VERSION`
-  resources with resedit directly, and drives both CLIs through `spawnSync`,
-  asserting exit codes and output; the fixture tests skip with a printed
-  reason when `go` is not on `PATH`.
-- Python: `npm run check:python` runs the shared byte-identity tests and 52
-  Windows tests with `subprocess` mocked; the orchestration itself refuses to
-  run off Windows.
+- Node: `node --test "scripts/win/*.test.mjs"` cross-compiles a real PE32+
+  fixture with Go, adds packager-style `INTEGRITY` and `RT_VERSION` resources
+  with resedit directly, and drives both CLIs through `spawnSync`, asserting
+  exit codes, stdout/stderr contents, and that a refused rewrite leaves the
+  input untouched; the fixture tests skip with a printed reason when `go` is
+  not on `PATH`, while the pure-helper and usage-error tests always run.
+- Python: `npm run check:python` runs the shared byte-identity tests and the
+  Windows tests, which cover source and executable discovery, the exact
+  anchors and the prelude, the `icacls`, PowerShell, and Go command
+  construction, helper output decoding, the integrity rewrite, the
+  backup/restore swap, and the orchestration order with `subprocess` and the
+  helpers mocked; the orchestration itself refuses to run off Windows.
 - PowerShell: `install.ps1` is parsed with `Parser.ParseFile` in CI;
   `CODEX_SUBSCRIPTION_ROUTER_DRY_RUN=1` makes dot-sourcing it define the
-  functions without installing, so `Assert-Prerequisite` and the source
-  resolution can be exercised on any host.
+  functions without installing. On a non-Windows host `Assert-Prerequisite`
+  then fails at its Windows-host check, so only the helpers that do not need
+  Windows (version parsing, path normalisation) can be exercised there.
 - CI: the `macos` job adds the Windows cross-compile and the PE helper tests;
   the `windows` job repeats the Go, JavaScript, PE helper, Python, and release
   checks on `windows-latest` and parses `install.ps1`.
 
 ## Status
 
-Implemented and unit-tested on Linux and in CI. Never launched against an
+Implemented and unit-tested on Linux; CI repeats the checks on macOS and
+Windows (the `macos` and `windows` jobs). Never launched against an
 official Windows build: no Windows build is recorded in
 `TESTED_WINDOWS_SOURCE_BUILDS` or [COMPATIBILITY.md](COMPATIBILITY.md), the
 patcher requires `--allow-untested-source`, and the Windows smoke test has not

@@ -22,7 +22,11 @@ Two ways to run it:
        powershell -ExecutionPolicy Bypass -File .\install.ps1 [-SourceDir <path>] [-AllowUntestedSource] [-NoLaunch]
 
   Environment variables are honoured in both styles. -SourceDir wins over the
-  variable when both are given; the switches are enabled by either form.
+  variable when both are given; the switches are enabled by either form. From a
+  clone (a directory that also holds scripts\patch_app_windows.py) the clone
+  itself is always built and -SourceDir / CODEX_SUBSCRIPTION_ROUTER_SOURCE_DIR
+  are ignored, exactly as install.sh ignores them; they only choose where the
+  one-liner, or a copy of this file outside the repository, keeps its checkout.
 
   CODEX_SUBSCRIPTION_ROUTER_DRY_RUN=1 makes dot-sourcing this file define the
   functions without running the installation, so the repository checks can
@@ -36,13 +40,18 @@ param(
     [switch]$NoLaunch
 )
 
-# Everything below lives in this script block. Under `irm ... | iex` Invoke-Expression runs the
-# text in the user's interactive scope, where strict mode, the preference variables, and every
-# function and constant defined here would otherwise survive the installation (Write-Log or Fail
-# would even replace functions of the same name from the user's profile; strict mode cannot be
-# saved and restored because there is no Get-StrictMode). The block is invoked with `&` at the end
-# of the file, which gives all of it a scope that ends with the run in both invocation styles;
-# the param() variables above remain readable inside it, and Fail's `exit`/`throw` work as before.
+# Everything below, except the param() block above, lives in this script block. Under
+# `irm ... | iex` Invoke-Expression runs the text in the user's interactive scope, where strict
+# mode, the preference variables, and every function and constant defined here would otherwise
+# survive the installation (Write-Log or Fail would even replace functions of the same name from
+# the user's profile; strict mode cannot be saved and restored because there is no Get-StrictMode).
+# The block is invoked with `&` at the end of the file, which gives its contents a scope that ends
+# with the run in both invocation styles; the param() variables remain readable inside it, and
+# Fail's `exit`/`throw` work as before. The param() block itself has to stay outside, and no
+# scoping trick covers it: under `irm ... | iex` the parameter binder assigns $SourceDir,
+# $AllowUntestedSource and $NoLaunch in the caller's scope, so caller variables of those three
+# names that already exist are overwritten with the bound defaults ('' / False / False) and stay
+# that way after the run (when none exist beforehand, nothing is left behind).
 # The body is deliberately not indented: it is the whole installer.
 $installer = {
 Set-StrictMode -Version Latest
@@ -58,13 +67,23 @@ $PSNativeCommandUseErrorActionPreference = $false
 # ---------------------------------------------------------------------------------------------
 $RepositoryUrl = 'https://github.com/Mvnshi/codex-subscription-router.git'
 $SourceBranch = 'main'
-# The environment variables are the documented contract; [Environment]::GetFolderPath is the same
-# source Windows fills them from and only serves as a fallback for sessions that lack them.
+# USERPROFILE only places the default source checkout, which this script manages itself, so
+# [Environment]::GetFolderPath (the same source Windows fills the variable from) may stand in for a
+# session that lacks it.
 $UserProfileDir = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { $env:USERPROFILE } else { [Environment]::GetFolderPath('UserProfile') }
-$LocalAppDataDir = if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { $env:LOCALAPPDATA } else { [Environment]::GetFolderPath('LocalApplicationData') }
 $DefaultSourceDir = Join-Path -Path $UserProfileDir -ChildPath '.codex-subscription-router-mvnshi\source'
-$DestinationDir = Join-Path -Path $LocalAppDataDir -ChildPath 'Programs\Codex Subscription Router'
-$Launcher = Join-Path -Path $DestinationDir -ChildPath 'Codex Subscription Router.exe'
+# LOCALAPPDATA gets no such fallback: scripts\patch_app_windows.py derives the destination from
+# that variable alone and fails closed without it, and this script never passes --destination, so
+# a substitute here would announce, stop, and check a location the patcher does not use.
+# Assert-Prerequisite fails when it is missing (Fail is not defined yet at this point, and
+# Join-Path rejects an empty -Path); until then the destination paths stay empty.
+$LocalAppDataDir = [string]$env:LOCALAPPDATA
+$DestinationDir = ''
+$Launcher = ''
+if (-not [string]::IsNullOrWhiteSpace($LocalAppDataDir)) {
+    $DestinationDir = Join-Path -Path $LocalAppDataDir -ChildPath 'Programs\Codex Subscription Router'
+    $Launcher = Join-Path -Path $DestinationDir -ChildPath 'Codex Subscription Router.exe'
+}
 $PatcherRelativePath = 'scripts\patch_app_windows.py'
 $MinimumNodeVersion = [version]'22.12.0'
 $MinimumGoVersion = [version]'1.26.0'
@@ -80,6 +99,8 @@ $Options = [pscustomobject]@{
     } else {
         $DefaultSourceDir
     }
+    # Whether a directory was asked for at all, so Resolve-SourceDir can say when a clone overrides it.
+    SourceDirRequested = ((-not [string]::IsNullOrWhiteSpace($SourceDir)) -or (-not [string]::IsNullOrWhiteSpace($env:CODEX_SUBSCRIPTION_ROUTER_SOURCE_DIR)))
     AllowUntestedSource = ($AllowUntestedSource.IsPresent -or ($env:CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE -eq '1'))
     NoLaunch = ($NoLaunch.IsPresent -or ($env:CODEX_SUBSCRIPTION_ROUTER_NO_LAUNCH -eq '1'))
 }
@@ -302,6 +323,12 @@ function Assert-Prerequisite {
         Fail 'Codex Subscription Router supports Windows only.'
     }
 
+    # The same verdict scripts\patch_app_windows.py gives (see the constants above), reached before
+    # anything names the destination; the elevation message below is the first to.
+    if ([string]::IsNullOrWhiteSpace($LocalAppDataDir)) {
+        Fail 'LOCALAPPDATA is not set.'
+    }
+
     $architecture = [string]$env:PROCESSOR_ARCHITECTURE
     if ($architecture -notin @('AMD64', 'ARM64')) {
         $hint = ''
@@ -399,10 +426,16 @@ function Resolve-SourceDir {
     param([Parameter(Mandatory = $true)][string]$RequestedSourceDir)
     $RequestedSourceDir = Get-NormalizedDirectoryPath -Path $RequestedSourceDir
 
-    # Running from a clone (or an extracted copy of the repository): use it as-is.
+    # Running from a clone (or an extracted copy of the repository): use it as-is. -SourceDir and
+    # CODEX_SUBSCRIPTION_ROUTER_SOURCE_DIR only say where a checkout is kept when this file runs
+    # outside one, so a different directory named here is ignored exactly as install.sh ignores
+    # it; say so rather than silently building something other than what was asked for.
     if ($InstallerPath) {
         $scriptDir = Split-Path -Parent $InstallerPath
         if (Test-Path -LiteralPath (Join-Path -Path $scriptDir -ChildPath $PatcherRelativePath) -PathType Leaf) {
+            if ($Options.SourceDirRequested -and $RequestedSourceDir -ne (Get-NormalizedDirectoryPath -Path $scriptDir)) {
+                Write-Host "Note: running from a clone; building $scriptDir and ignoring the requested source directory $RequestedSourceDir."
+            }
             return $scriptDir
         }
     }
@@ -570,7 +603,8 @@ if ($env:CODEX_SUBSCRIPTION_ROUTER_DRY_RUN -eq '1') {
     try {
         & { . $installer; Main }
     } finally {
-        # The block variable is the one thing defined outside that scope; drop it as well.
+        # Besides the param() variables (see the comment where the block starts), the block
+        # variable is the only thing defined outside that scope; drop it as well.
         Remove-Variable -Name installer
     }
 }

@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+// drivePath builds an absolute fixture path rooted at a Windows drive letter.
+// filepath.Join("C:", "Users", ...) must not be used for these: Join keeps a
+// bare drive letter drive-RELATIVE on Windows ("C:Users\me"), a shape the
+// launcher never receives, so the windows CI job would model the wrong input.
+// Appending the separator to the drive ("C:\" on Windows, "C:/" on POSIX,
+// where these tests also run) keeps the result absolute. The elements are
+// spelled separately rather than as one slash-separated string so the tracked
+// source never contains a slash-delimited "Users" home prefix, which the
+// release check rejects as a machine-specific path.
+func drivePath(drive string, elements ...string) string {
+	return filepath.Join(append([]string{drive + string(filepath.Separator)}, elements...)...)
+}
+
 func setElectronExecutable(t *testing.T, name string) {
 	t.Helper()
 	previous := electronExecutable
@@ -17,9 +30,9 @@ func TestLauncherCommandDefaultExecutable(t *testing.T) {
 	if electronExecutable != "ChatGPT.exe" {
 		t.Fatalf("default electronExecutable = %q, want ChatGPT.exe", electronExecutable)
 	}
-	installDir := filepath.Join("C:", "Users", "me", "AppData", "Local", "Programs", "Codex Subscription Router")
+	installDir := drivePath("C:", "Users", "me", "AppData", "Local", "Programs", "Codex Subscription Router")
 	launcher := filepath.Join(installDir, "Codex Subscription Router.exe")
-	appData := filepath.Join("C:", "Users", "me", "AppData", "Roaming")
+	appData := drivePath("C:", "Users", "me", "AppData", "Roaming")
 
 	executable, arguments, err := launcherCommand(launcher, appData, nil)
 	if err != nil {
@@ -36,8 +49,8 @@ func TestLauncherCommandDefaultExecutable(t *testing.T) {
 
 func TestLauncherCommandOverriddenExecutable(t *testing.T) {
 	setElectronExecutable(t, "Codex.exe")
-	installDir := filepath.Join("D:", "Apps", "Router")
-	executable, _, err := launcherCommand(filepath.Join(installDir, "launcher.exe"), filepath.Join("D:", "Roaming"), nil)
+	installDir := drivePath("D:", "Apps", "Router")
+	executable, _, err := launcherCommand(filepath.Join(installDir, "launcher.exe"), drivePath("D:", "Roaming"), nil)
 	if err != nil {
 		t.Fatalf("launcherCommand: %v", err)
 	}
@@ -47,9 +60,9 @@ func TestLauncherCommandOverriddenExecutable(t *testing.T) {
 }
 
 func TestLauncherCommandPassesArgumentsThroughInOrder(t *testing.T) {
-	appData := filepath.Join("C:", "Users", "me", "AppData", "Roaming")
+	appData := drivePath("C:", "Users", "me", "AppData", "Roaming")
 	passthrough := []string{"codex://open?thread=1", "--enable-logging", "--user-data-dir=ignored", "-c", "x=y"}
-	_, arguments, err := launcherCommand(filepath.Join("C:", "app", "launcher.exe"), appData, passthrough)
+	_, arguments, err := launcherCommand(drivePath("C:", "app", "launcher.exe"), appData, passthrough)
 	if err != nil {
 		t.Fatalf("launcherCommand: %v", err)
 	}
@@ -72,8 +85,8 @@ func TestLauncherCommandPassesArgumentsThroughInOrder(t *testing.T) {
 }
 
 func TestLauncherCommandErrors(t *testing.T) {
-	launcher := filepath.Join("C:", "app", "launcher.exe")
-	appData := filepath.Join("C:", "Users", "me", "AppData", "Roaming")
+	launcher := drivePath("C:", "app", "launcher.exe")
+	appData := drivePath("C:", "Users", "me", "AppData", "Roaming")
 
 	if _, _, err := launcherCommand("", appData, nil); err == nil {
 		t.Fatal("empty launcher path unexpectedly succeeded")

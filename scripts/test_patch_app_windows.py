@@ -51,9 +51,14 @@ class ImportTests(unittest.TestCase):
             os.getlogin = forbidden
             os.system = forbidden
             sys.path.insert(0, {str(win.SCRIPT_DIRECTORY)!r})
+            # Blame only modules the import itself pulls in: on Windows the
+            # interpreter's own start-up can already have loaded winreg, so a
+            # bare "winreg in sys.modules" would fail there for nothing the
+            # patcher did.
+            before = set(sys.modules)
             import patch_app_windows
             print(json.dumps({{
-                "winreg": "winreg" in sys.modules,
+                "winreg": "winreg" in set(sys.modules) - before,
                 "home": sorted(os.listdir({str(home)!r})),
             }}))
             """

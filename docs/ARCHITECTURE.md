@@ -9,7 +9,7 @@ work.
 
 Codex Subscription Router replaces the copied app's bundled `codex` executable
 with a small Go multiplexer and keeps the original binary beside it as
-`codex.real`.
+`codex.real` (`codex.exe` and `codex.real.exe` on Windows).
 
 ## Request routing
 
@@ -43,9 +43,9 @@ The patcher extracts `app.asar`, verifies exact upstream anchors, inserts the
 account UI, disables self-update, and repacks the archive with an updated
 integrity hash. The app receives a separate Chromium profile and URL scheme.
 
-The copied Computer Use service, Node runtime, and callers are re-signed under
-one Apple team. The helper uses a separate bundle identity and socket, avoiding
-the official app's privacy grants and app-group container.
+On macOS the copied Computer Use service, Node runtime, and callers are
+re-signed under one Apple team. The helper uses a separate bundle identity and
+socket, avoiding the official app's privacy grants and app-group container.
 
 ## Plugin behavior
 
@@ -61,3 +61,25 @@ routes require a random 256-bit token. CORS is limited to the copied app's
 `app://-` origin. The service exposes account metadata, aggregated usage and
 profile data, thread ownership, login/logout actions, and an authenticated SSE
 event stream; it never returns OAuth tokens.
+
+## Platform notes
+
+The Windows port is provisional; see [WINDOWS.md](WINDOWS.md) for what has and
+has not been verified. The platform-specific pieces are:
+
+| Piece | macOS | Windows |
+| --- | --- | --- |
+| Launcher | `native/launcher.c`, compiled by the patcher into `Contents/MacOS/CodexSubscriptionRouterLauncher`; runs `ChatGPT` with the isolated `--user-data-dir` | `cmd/codex-router-launcher` (Go), built as `Codex Subscription Router.exe` with `-H=windowsgui` and `-X main.electronExecutable=<name>`; runs the sibling Electron executable with `--user-data-dir=%APPDATA%\Codex Subscription Router` first and its own arguments after, exits with the child's code, and reports failures in a MessageBox |
+| Bundled Codex | `Contents/Resources/codex` becomes the mux; original parked as `codex.real` | the single `codex.exe` under the copy becomes the mux; original renamed `codex.real.exe` beside it. `resolveRealExecutable` tries `codex.real.exe` then `codex.real` on Windows, `codex.real` elsewhere; `CODEX_MUX_REAL_CODEX` overrides |
+| Asar integrity | `ElectronAsarIntegrity` in `Info.plist` | `INTEGRITY`/`ELECTRONASAR` resource in the Electron executable, rewritten by `scripts/win/set-asar-integrity.mjs`. Both record the header digest from `asar_header_digest` |
+| Child shutdown | `SIGINT` to each child | close the child's stdin, wait up to 2 s, then kill |
+| Mux shutdown signals | `SIGINT`, `SIGTERM` | `os.Interrupt` only |
+| Desktop profile | `~/Library/Application Support/Codex Subscription Router` | `%APPDATA%\Codex Subscription Router` |
+| State root | `~/.codex-mux` (`0700`) | `%USERPROFILE%\.codex-mux` (NTFS ACL set with `icacls`) |
+| Primary account | `~/.codex` | `%USERPROFILE%\.codex` |
+| Install location | `~/Applications/Codex Subscription Router.app` | `%LOCALAPPDATA%\Programs\Codex Subscription Router\` |
+| Identity | bundle ID `app.cdxmux.multi`, URL scheme edited in `Info.plist` | no bundle identity; URL scheme literal retargeted to `codex-subscription-router` in the main-process bundles |
+| Computer Use | helper re-identified and signed | none; the copy is pointed at an unused named pipe |
+
+The control port (48123), token file, state layout, routing, and renderer
+patches are the same on both platforms.

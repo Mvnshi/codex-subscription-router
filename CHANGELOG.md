@@ -12,6 +12,18 @@ this project uses [Semantic Versioning](https://semver.org/).
   rebuilds, recoverable upgrades, and automatic launch.
 - Reset-aware routing that prioritizes weekly quota at risk of expiring and
   gives a bounded boost to subscriptions with banked usage resets.
+- Provisional Windows support: `install.ps1`; `scripts/patch_app_windows.py`
+  (run-time discovery of the official install with exact, fail-closed checks,
+  `codex.exe`/`codex.real.exe`, `%APPDATA%` profile isolation, `icacls`
+  state hardening, `codex-subscription-router://` scheme retargeting); the Go
+  launcher `cmd/codex-router-launcher`, built as
+  `Codex Subscription Router.exe`; Windows child shutdown (stdin EOF, then
+  kill) and
+  `codex.real.exe` lookup in the multiplexer; the Node PE helpers
+  `scripts/win/exe-info.mjs` and `scripts/win/set-asar-integrity.mjs` for the
+  `INTEGRITY`/`ELECTRONASAR` resource; a `windows` CI job; and
+  `docs/WINDOWS.md`. No official Windows build has been exercised yet, so
+  `--allow-untested-source` is required until one is recorded.
 
 ### Fixed
 
@@ -23,6 +35,7 @@ this project uses [Semantic Versioning](https://semver.org/).
 - Native usage surfaces (limit banner, sidebar usage alert, reset prompts)
   now reflect pooled usage, so a depleted Primary account no longer triggers
   them while another connected subscription still has weekly capacity.
+
 ### Changed
 
 - The account menu, Usage sheet, and Plugins picker open with the last known
@@ -31,6 +44,15 @@ this project uses [Semantic Versioning](https://semver.org/).
 - The copied app can no longer start Sparkle through the renderer's update
   gate or the Check for Updates menu item, so it does not offer to replace
   itself with an unpatched official build.
+- `@electron/asar` 4.2.1 → 4.3.0, `actions/checkout` 6.1.0 → 7.0.1, and
+  `actions/setup-node` 6.5.0 → 7.0.0.
+- `resedit` 3.1.0 added as an exact-pinned dev dependency for the Windows
+  integrity-resource rewrite. The release check now requires every npm dev
+  dependency to be exact and lock-matched, checks `install.sh`'s executable
+  bit through git's index mode, and rejects tracked `.exe`, `.lnk`, `.msi`,
+  and `.msix` files.
+- CI runs a `macos` job and a `windows` job; the macOS job also
+  cross-compiles the Go packages for Windows.
 
 
 ## [0.1.0] - 2026-08-15

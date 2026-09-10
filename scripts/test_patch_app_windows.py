@@ -1,8 +1,10 @@
 """Windows patcher tests; run on any OS, no Windows tools or official app required."""
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -29,8 +31,41 @@ class ImportTests(unittest.TestCase):
     def test_import_is_side_effect_free(self):
         # Importing must not touch the registry, spawn processes, or need
         # Windows environment variables: the tests import it on Linux/macOS.
+        # This process imported the module long before the test ran, so a
+        # fresh interpreter does the import with every process-spawning entry
+        # point and os.getlogin replaced by a failing stub and the home
+        # directory pointed at an empty temporary one, then reports whether
+        # winreg was loaded and what appeared under that home.
         self.assertTrue(hasattr(win, "patch_app"))
         self.assertIs(win.shared, patch_app)
+        home = Path(tempfile.mkdtemp())
+        probe = textwrap.dedent(
+            f"""
+            import json, os, subprocess, sys
+
+            def forbidden(*args, **kwargs):
+                raise AssertionError("import spawned a process or looked up the login")
+
+            for name in ("run", "check_output", "check_call", "call", "Popen"):
+                setattr(subprocess, name, forbidden)
+            os.getlogin = forbidden
+            os.system = forbidden
+            sys.path.insert(0, {str(win.SCRIPT_DIRECTORY)!r})
+            import patch_app_windows
+            print(json.dumps({{
+                "winreg": "winreg" in sys.modules,
+                "home": sorted(os.listdir({str(home)!r})),
+            }}))
+            """
+        )
+        env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+        completed = subprocess.run(
+            [sys.executable, "-c", probe], capture_output=True, text=True, env=env
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertFalse(report["winreg"])
+        self.assertEqual(report["home"], [])
 
     def test_patch_app_is_windows_only(self):
         if sys.platform == "win32":
@@ -205,6 +240,37 @@ class CodexExecutableTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             win.locate_codex_executable(self.app, "resources/missing.exe")
 
+    def test_override_is_confined_to_the_source_directory(self):
+        # pathlib drops the left operand for an anchored right operand and keeps
+        # "..": either would make the swap run on the official install.
+        elsewhere = self.app.parent / "elsewhere" / "codex.exe"
+        elsewhere.parent.mkdir(parents=True)
+        elsewhere.write_bytes(b"MZ")
+        (self.app / "resources" / "codex.exe").write_bytes(b"MZ")
+        for bad in (
+            str(elsewhere),
+            "\\codex.exe",
+            "/codex.exe",
+            "C:\\codex.exe",
+            "C:codex.exe",
+            "\\\\server\\share\\codex.exe",
+            "../elsewhere/codex.exe",
+            "resources/../../elsewhere/codex.exe",
+            "",
+        ):
+            with self.subTest(bad=bad), self.assertRaises(RuntimeError) as caught:
+                win.locate_codex_executable(self.app, bad)
+            self.assertIn("--codex-executable", str(caught.exception))
+        self.assertEqual(elsewhere.read_bytes(), b"MZ")
+
+    def test_override_must_name_codex_exe(self):
+        # The multiplexer is copied over whatever the override names; pointing
+        # it at another file would leave the app spawning the official codex.
+        (self.app / "resources" / "other.exe").write_bytes(b"MZ")
+        with self.assertRaises(RuntimeError) as caught:
+            win.locate_codex_executable(self.app, "resources/other.exe")
+        self.assertIn("must name codex.exe", str(caught.exception))
+
 
 class UnpackGlobTests(unittest.TestCase):
     def test_scoped_and_plain_packages(self):
@@ -285,14 +351,22 @@ class PreludeTests(unittest.TestCase):
     def test_windows_prelude_is_exact(self):
         self.assertEqual(
             win.windows_desktop_profile_prelude(),
-            'process.env.SKY_CUA_SERVICE_NATIVE_PIPE_PATH="\\\\\\\\.\\\\pipe\\\\codex-subscription-router-computer-use";'
+            'process.env.SKY_CUA_SERVICE_NATIVE_PIPE_PATH="\\\\\\\\.\\\\pipe\\\\codex-subscription-router-computer-use-"'
+            "+globalThis.crypto.randomUUID();"
             "process.env.CODEX_ELECTRON_SKIP_COMPUTER_USE_CANONICAL_REFRESH=`1`;",
         )
 
     def test_prelude_is_a_javascript_string_for_the_pipe(self):
+        # The prefix is a JSON (hence JavaScript) string literal and the
+        # per-launch suffix is appended at run time, so no other local account
+        # can pre-create the pipe under a name known in advance.
         prelude = win.windows_desktop_profile_prelude()
-        literal = prelude.split("=", 1)[1].split(";", 1)[0]
-        self.assertEqual(json.loads(literal), r"\\.\pipe\codex-subscription-router-computer-use")
+        expression = prelude.split("=", 1)[1].split(";", 1)[0]
+        literal, plus, suffix = expression.partition("+")
+        self.assertEqual(plus, "+")
+        self.assertEqual(json.loads(literal), r"\\.\pipe\codex-subscription-router-computer-use-")
+        self.assertEqual(json.loads(literal), win.COMPUTER_USE_PIPE_PREFIX)
+        self.assertEqual(suffix, "globalThis.crypto.randomUUID()")
 
     def test_prelude_composes_with_isolate_desktop_profile(self):
         extracted = Path(tempfile.mkdtemp()) / "asar"
@@ -405,6 +479,29 @@ class ProtocolSchemeTests(unittest.TestCase):
         (extracted / ".vite" / "build").mkdir(parents=True)
         self.assertEqual(win.retarget_protocol_scheme(extracted), 0)
 
+    def test_registration_with_a_non_literal_scheme_fails_closed(self):
+        # A registration that cannot be retargeted would make the copy take
+        # that scheme over through HKCU\Software\Classes at first launch, so
+        # the patch stops and leaves the bundle unmodified.
+        for residue in (
+            "const s=`codex`;e.app.setAsDefaultProtocolClient(s);",
+            "e.app.setAsDefaultProtocolClient('chatgpt');",
+            "e.app.setAsDefaultProtocolClient.call(e.app,`codex`);",
+            "e.app.setAsDefaultProtocolClient?.(`codex`);",
+            "const f=e.app.setAsDefaultProtocolClient;f(`codex`);",
+        ):
+            with self.subTest(residue=residue):
+                extracted = Path(tempfile.mkdtemp()) / "asar"
+                build = extracted / ".vite" / "build"
+                build.mkdir(parents=True)
+                text = "e.app.setAsDefaultProtocolClient(`codex`);" + residue
+                (build / "main-a.js").write_text(text, encoding="utf-8")
+                with self.assertRaises(RuntimeError) as caught:
+                    win.retarget_protocol_scheme(extracted)
+                self.assertIn("main-a.js", str(caught.exception))
+                self.assertIn("setAsDefaultProtocolClient", str(caught.exception))
+                self.assertEqual((build / "main-a.js").read_text(encoding="utf-8"), text)
+
 
 class LongPathTests(unittest.TestCase):
     def test_longest_path_length(self):
@@ -484,7 +581,82 @@ class CommandCompositionTests(unittest.TestCase):
         self.assertTrue(command[1].endswith("exe-info.mjs"))
         self.assertEqual(command[2], str(Path("/apps/ChatGPT/ChatGPT.exe")))
         self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
-        self.assertTrue(run.call_args.kwargs["check"])
+        self.assertTrue(run.call_args.kwargs["capture_output"])
+
+    def test_helper_failures_carry_the_helper_message(self):
+        # CalledProcessError would report only the exit status; the reason is
+        # on stderr and must reach the operator so the failed check is named.
+        failures = (
+            (
+                lambda: win.exe_info(Path("/apps/ChatGPT/ChatGPT.exe")),
+                win.EXE_INFO_SCRIPT,
+                subprocess.CompletedProcess(
+                    [], 2, stdout="", stderr="exe-info: X is not a PE executable (no MZ header)\n"
+                ),
+                "exe-info failed (exit 2): exe-info: X is not a PE executable (no MZ header)",
+            ),
+            (
+                lambda: win.rewrite_asar_integrity(
+                    Path("/stage/ChatGPT.exe"), EXE_INFO["asarIntegrity"][0], "cd" * 32
+                ),
+                win.SET_ASAR_INTEGRITY_SCRIPT,
+                subprocess.CompletedProcess(
+                    [], 1, stdout="", stderr="set-asar-integrity: verification failed: "
+                    "ChatGPT.exe lost its integrity resource\n"
+                ),
+                "set-asar-integrity failed (exit 1): set-asar-integrity: verification failed",
+            ),
+            (
+                lambda: win.ensure_destination_processes_stopped(Path("/lad/Programs/Router")),
+                win.EXE_INFO_SCRIPT,
+                subprocess.CompletedProcess(
+                    [], 1, stdout="", stderr="Get-CimInstance : Access denied\n"
+                ),
+                "process check (Get-CimInstance) failed (exit 1): Get-CimInstance : Access denied",
+            ),
+            (
+                lambda: win.exe_info(Path("/apps/ChatGPT/ChatGPT.exe")),
+                win.EXE_INFO_SCRIPT,
+                subprocess.CompletedProcess([], 3, stdout="on stdout only", stderr=""),
+                "exe-info failed (exit 3): on stdout only",
+            ),
+            (
+                lambda: win.exe_info(Path("/apps/ChatGPT/ChatGPT.exe")),
+                win.EXE_INFO_SCRIPT,
+                subprocess.CompletedProcess([], 4, stdout="", stderr=""),
+                "exe-info failed (exit 4): no output",
+            ),
+        )
+        for call, script, completed, expected in failures:
+            with self.subTest(expected=expected), \
+                 mock.patch.object(win.subprocess, "run", return_value=completed) as run, \
+                 mock.patch.object(win.shutil, "which", return_value="/usr/bin/node"), \
+                 mock.patch.object(script.__class__, "is_file", return_value=True), \
+                 self.assertRaises(RuntimeError) as caught:
+                call()
+            self.assertIn(expected, str(caught.exception))
+            self.assertFalse(run.call_args.kwargs["check"])
+
+    def test_helper_output_that_is_not_json_is_a_patch_failure(self):
+        completed = subprocess.CompletedProcess([], 0, stdout="not json", stderr="")
+        with mock.patch.object(win.subprocess, "run", return_value=completed), \
+             mock.patch.object(win.shutil, "which", return_value="/usr/bin/node"), \
+             mock.patch.object(win.EXE_INFO_SCRIPT.__class__, "is_file", return_value=True), \
+             self.assertRaises(RuntimeError) as caught:
+            win.exe_info(Path("/apps/ChatGPT/ChatGPT.exe"))
+        self.assertIn("exe-info did not print JSON", str(caught.exception))
+
+    def test_asar_output_decodes_utf8(self):
+        # asar writes UTF-8 to the pipe; Python's default text mode would use
+        # the ANSI code page on Windows.
+        with mock.patch.object(
+            win.subprocess, "check_output", return_value="pack   : /a/\u00e9.js\n"
+        ) as check_output:
+            listing = win.asar_output(["node", "asar.mjs", "list", "--is-pack", "x.asar"])
+        self.assertEqual(listing, "pack   : /a/\u00e9.js")
+        self.assertEqual(check_output.call_args.args[0], ["node", "asar.mjs", "list", "--is-pack", "x.asar"])
+        self.assertEqual(check_output.call_args.kwargs["encoding"], "utf-8")
+        self.assertTrue(check_output.call_args.kwargs["text"])
 
     def test_integrity_entry_normalises_slashes_and_case(self):
         info = {"asarIntegrity": [{"file": "Resources/App.asar", "alg": "SHA256", "value": "x"}]}
@@ -522,13 +694,27 @@ class CommandCompositionTests(unittest.TestCase):
         self.assertIn("OrdinalIgnoreCase", script)
         self.assertIn("ProcessId", script)
 
-    def test_icacls_command(self):
+    def test_icacls_commands(self):
+        # /reset first: /inheritance:r and /grant:r leave explicit ACEs that
+        # other principals already hold on an existing root in place.
         self.assertEqual(
-            win.icacls_command(Path("C:\\Users\\me\\.codex-mux"), "PC\\me"),
+            win.icacls_commands(Path("C:\\Users\\me\\.codex-mux"), "PC\\me"),
             [
-                "icacls", "C:\\Users\\me\\.codex-mux", "/inheritance:r", "/grant:r",
-                "PC\\me:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F",
+                ["icacls", "C:\\Users\\me\\.codex-mux", "/reset"],
+                [
+                    "icacls", "C:\\Users\\me\\.codex-mux", "/inheritance:r", "/grant:r",
+                    "PC\\me:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F",
+                ],
             ],
+        )
+
+    def test_harden_state_root_runs_both_commands_in_order(self):
+        with mock.patch.object(patch_app, "run") as run, \
+             mock.patch.dict(win.os.environ, {"USERNAME": "me", "USERDOMAIN": "PC"}):
+            win.harden_state_root(Path("C:\\Users\\me\\.codex-mux"))
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            win.icacls_commands(Path("C:\\Users\\me\\.codex-mux"), "PC\\me"),
         )
 
     def test_shortcut_command(self):

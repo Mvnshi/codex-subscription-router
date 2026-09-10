@@ -20,8 +20,11 @@ npm run release:check
 `npm run check` runs the Go tests and vet, the JavaScript syntax and unit
 checks, the Windows PE helper tests (`check:win`, which cross-compile a Go
 fixture and therefore need `go` on `PATH`), the Python compile and unit tests
-for both patchers, and the shell installer syntax check. It runs on macOS,
-Linux, and Windows.
+for both patchers, and the shell installer syntax check. It runs on macOS and
+Linux; `check:python` and `release:check` call `python3` and `check:shell`
+calls `bash`, which stock Windows does not provide, so on Windows run the
+per-tool commands listed under "Development and verification" in `README.md`
+(the same ones the `windows` CI job runs).
 
 Do not commit an app bundle, a patched executable, credentials, signing
 certificates, provisioning profiles, account state, or captures containing

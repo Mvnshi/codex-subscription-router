@@ -399,11 +399,27 @@ npm run release:check
 ```
 
 The Go backend and injected renderer have no runtime third-party dependencies.
-`@electron/asar` and `resedit` are build-only. `npm run check` runs on macOS,
-Linux, and Windows and includes the Windows PE helper tests (`check:win`), which
-need `go` on `PATH`. CI runs a `macos` and a `windows` job. Deterministic UI
-preview routes are enabled only when `CODEX_MUX_UI_TESTS=1` is present at
-launch and remain token-authenticated.
+`@electron/asar` and `resedit` are build-only. `npm run check` and
+`npm run release:check` are for macOS and Linux: `check:python` and
+`release:check` call `python3` and `check:shell` calls `bash`, which a stock
+Windows machine does not provide. On Windows run the per-tool commands the
+`windows` CI job runs instead (`py -3` in place of `python` if `python` is the
+Microsoft Store placeholder):
+
+```powershell
+npm run check:go
+npm run check:js
+npm run check:win
+python -m py_compile scripts/patch_app.py scripts/patch_app_windows.py scripts/check_release.py
+python -m unittest discover -s scripts -p "test_*.py"
+python scripts/check_release.py
+```
+
+`check:win`, the Windows PE helper tests, needs `go` on `PATH` on every OS.
+`check:shell` (`bash -n install.sh`) has no Windows equivalent; CI parses
+`install.ps1` with the PowerShell parser instead. CI runs a `macos` and a
+`windows` job. Deterministic UI preview routes are enabled only when
+`CODEX_MUX_UI_TESTS=1` is present at launch and remain token-authenticated.
 
 The signed-app test procedure is in [SMOKE-TEST.md](docs/SMOKE-TEST.md). The
 latest completed run is recorded in

@@ -11,8 +11,11 @@ file, signing certificate, provisioning profile, or account data.
    in that file's Windows table with its `FileVersion`; until then the table
    stays empty and the release notes say so.
 4. Run `npm ci --ignore-scripts`, `npm run check`, and
-   `npm run release:check` on macOS and on Windows, or confirm that CI's
-   `macos` and `windows` jobs are green for the exact release commit.
+   `npm run release:check` on macOS, and on Windows the per-tool check
+   commands from the README's "Development and verification" section (the
+   npm scripts call `python3` and `bash`, which stock Windows lacks); or
+   confirm that CI's `macos` and `windows` jobs are green for the exact
+   release commit.
 5. Complete `docs/SMOKE-TEST.md` with a team-backed signature and record the
    exact commit, macOS version, and signing team in the release draft. The
    Windows checklist in that file is required for any Windows build the release

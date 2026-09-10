@@ -25,7 +25,8 @@ Two ways to run it:
   variable when both are given; the switches are enabled by either form.
 
   CODEX_SUBSCRIPTION_ROUTER_DRY_RUN=1 makes dot-sourcing this file define the
-  functions without running the installation (used by the repository checks).
+  functions without running the installation, so the repository checks can
+  exercise them without installing anything.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -35,6 +36,15 @@ param(
     [switch]$NoLaunch
 )
 
+# Everything below lives in this script block. Under `irm ... | iex` Invoke-Expression runs the
+# text in the user's interactive scope, where strict mode, the preference variables, and every
+# function and constant defined here would otherwise survive the installation (Write-Log or Fail
+# would even replace functions of the same name from the user's profile; strict mode cannot be
+# saved and restored because there is no Get-StrictMode). The block is invoked with `&` at the end
+# of the file, which gives all of it a scope that ends with the run in both invocation styles;
+# the param() variables above remain readable inside it, and Fail's `exit`/`throw` work as before.
+# The body is deliberately not indented: it is the whole installer.
+$installer = {
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 # PowerShell never throws on a non-zero native exit code, so every native command below checks
@@ -60,9 +70,8 @@ $MinimumNodeVersion = [version]'22.12.0'
 $MinimumGoVersion = [version]'1.26.0'
 $MinimumPythonVersion = [version]'3.11.0'
 
-# Options are captured into an ordinary variable here because, under Invoke-Expression, the
-# param() variables are not visible to the functions defined below; only variables assigned at
-# this top level are. Main is therefore also called from this top level (see the end of the file).
+# Options are merged once here from the parameters and the environment so every function reads
+# one object regardless of how the script was invoked.
 $Options = [pscustomobject]@{
     SourceDir = if (-not [string]::IsNullOrWhiteSpace($SourceDir)) {
         $SourceDir
@@ -103,8 +112,9 @@ function Fail {
     }
     # Running via `irm ... | iex`: `exit` would close the user's console window together with the
     # message above, so raise a terminating error instead. PowerShell prints it, stops the
-    # installation, and the session stays open.
-    throw "Install failed: $Reason"
+    # installation, and the session stays open. The reason is already on the console, so the
+    # error carries a short marker rather than repeating it.
+    throw 'Installation stopped.'
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -123,13 +133,19 @@ function Invoke-NativeCommand {
     Runs a native command whose output belongs on the console (npm, git pull, the patcher).
     Output is sent to the host explicitly: an uncaptured native command inside a function would
     otherwise become that function's return value and corrupt callers that return a path.
+    Standard error and the exit code are treated exactly as in Get-NativeOutput (see there).
     #>
     param(
         [Parameter(Mandatory = $true)][string]$Description,
         [Parameter(Mandatory = $true)][string]$Command,
         [string[]]$Arguments = @()
     )
+    $ErrorActionPreference = 'Continue'
+    $global:LASTEXITCODE = $null
     & $Command @Arguments | Out-Host
+    if ($null -eq $LASTEXITCODE) {
+        Fail "$Description could not be started ('$Command' did not run)."
+    }
     if ($LASTEXITCODE -ne 0) {
         Fail "$Description failed with exit code $LASTEXITCODE."
     }
@@ -137,16 +153,30 @@ function Invoke-NativeCommand {
 
 function Get-NativeOutput {
     <#
-    Runs a native command and returns its standard output (trimmed) with the exit code. Standard
-    error is intentionally not redirected: in Windows PowerShell 5.1 a redirected stderr line
-    becomes an error record, which $ErrorActionPreference = 'Stop' would turn into an exception
-    unrelated to the exit code. Left alone it simply reaches the console.
+    Runs a native command and returns its standard output (trimmed) with the exit code.
+
+    Standard error is not redirected, and $ErrorActionPreference is lowered to Continue for the
+    call (the assignment is local to this function and ends with it). Windows PowerShell 5.1
+    wraps native stderr lines into NativeCommandError records not only under an in-script 2> or
+    2>&1 but also whenever powershell.exe has no console of its own (the ISE and other GUI hosts,
+    a parent that captures both streams, CREATE_NO_WINDOW/DETACHED_PROCESS spawns), and 'Stop'
+    would turn the first such line -- git's "Cloning into ...", an npm warning -- into a
+    terminating error before the exit code is read. PowerShell 7 never applies the preference to
+    native stderr. The exit code stays the only verdict: under Continue a command that cannot
+    start at all (removed since the prerequisite check, blocked by policy) reports a
+    non-terminating error and leaves $LASTEXITCODE untouched, so it is cleared first and a
+    missing value fails closed instead of inheriting the previous command's 0.
     #>
     param(
         [Parameter(Mandatory = $true)][string]$Command,
         [string[]]$Arguments = @()
     )
+    $ErrorActionPreference = 'Continue'
+    $global:LASTEXITCODE = $null
     $lines = @(& $Command @Arguments)
+    if ($null -eq $LASTEXITCODE) {
+        Fail "'$Command' could not be started."
+    }
     $exitCode = $LASTEXITCODE
     $text = (($lines | ForEach-Object { [string]$_ }) -join "`n").Trim()
     return [pscustomobject]@{ ExitCode = $exitCode; Output = $text }
@@ -299,6 +329,17 @@ function Assert-Prerequisite {
         Fail "missing prerequisites: $($missing -join ' '). Install Git for Windows, Go 1.26+, Node.js 22.12+ (with npm), and Python 3.11+, then rerun this command."
     }
 
+    # PowerShell's command search tries <name>.ps1 before the PATHEXT extensions, and Node.js ships
+    # npm.ps1 beside npm.cmd, so a bare `npm` would run the .ps1 shim: Windows PowerShell 5.1's
+    # default Restricted policy refuses it (the documented one-liner would die on `npm ci` with a
+    # raw "running scripts is disabled" error instead of a Fail message), and the shim rebuilds
+    # its arguments through Invoke-Expression. Get-ApplicationPath returns npm.cmd, the file the
+    # check above actually verified, which no execution policy gates.
+    $npmPath = Get-ApplicationPath -Name 'npm'
+    if ([string]::IsNullOrWhiteSpace($npmPath)) {
+        Fail 'could not resolve the path of npm.'
+    }
+
     $nodeProbe = Get-NativeOutput -Command 'node' -Arguments @('-p', 'process.versions.node')
     $nodeVersion = ConvertTo-Version -Text $nodeProbe.Output
     if ($nodeProbe.ExitCode -ne 0 -or $null -eq $nodeVersion) {
@@ -326,6 +367,7 @@ function Assert-Prerequisite {
         PythonCommand = $python.Command
         PythonArguments = [string[]]$python.Arguments
         PythonDisplay = $python.Display
+        NpmPath = $npmPath
         NodeVersion = $nodeVersion
         GoVersion = $goVersion
     }
@@ -334,8 +376,28 @@ function Assert-Prerequisite {
 # ---------------------------------------------------------------------------------------------
 # Source checkout (same rules as install.sh).
 # ---------------------------------------------------------------------------------------------
+function Get-NormalizedDirectoryPath {
+    <#
+    Strips trailing path separators. Windows PowerShell 5.1 wraps a native argument that contains
+    spaces in "..." without escaping a trailing backslash, so "D:\my projects\router\" (what tab
+    completion produces) reaches git as `D:\my projects\router"` because the C runtime reads \"
+    as a literal quote. A drive root keeps its backslash: a bare "D:" would mean that drive's
+    current directory.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $trimmed = $Path.TrimEnd('\', '/')
+    if ($trimmed -match '^[A-Za-z]:$') {
+        return $trimmed + '\'
+    }
+    if ([string]::IsNullOrEmpty($trimmed)) {
+        return $Path
+    }
+    return $trimmed
+}
+
 function Resolve-SourceDir {
     param([Parameter(Mandatory = $true)][string]$RequestedSourceDir)
+    $RequestedSourceDir = Get-NormalizedDirectoryPath -Path $RequestedSourceDir
 
     # Running from a clone (or an extracted copy of the repository): use it as-is.
     if ($InstallerPath) {
@@ -428,9 +490,30 @@ function Main {
 
     $projectDir = Resolve-SourceDir -RequestedSourceDir $Options.SourceDir
     Push-Location -LiteralPath $projectDir
+    $previousIoEncoding = $env:PYTHONIOENCODING
+    $previousOutputEncoding = $null
     try {
+        # Invoke-NativeCommand hands npm and the patcher a pipe, not the console. PowerShell decodes
+        # native output with [Console]::OutputEncoding, the OEM code page (cp437 on en-US); npm
+        # writes UTF-8 to a pipe, and Python encodes a piped stdout with the ANSI code page and
+        # errors='strict', so the patcher's progress lines come out garbled and a user-profile path
+        # with a character outside the ANSI code page makes print() raise UnicodeEncodeError after
+        # the copy has been built. PYTHONIOENCODING (rather than PYTHONUTF8, which would also change
+        # the patcher's default file and subprocess encodings) makes Python write UTF-8, and the
+        # console is switched to decode UTF-8. Both are restored in the finally block because they
+        # would otherwise outlive the run in the user's `irm ... | iex` session.
+        $env:PYTHONIOENCODING = 'utf-8'
+        try {
+            $previousOutputEncoding = [Console]::OutputEncoding
+            [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+        } catch {
+            # SetConsoleOutputCP fails when the process has no console (a detached spawn). The
+            # setting only affects how the output is displayed, not what is checked, so continue
+            # with the encoding the host already had.
+        }
+
         Write-Log 'Installing locked build tools'
-        Invoke-NativeCommand -Description 'npm ci' -Command 'npm' -Arguments @('ci', '--ignore-scripts', '--no-audit', '--no-fund')
+        Invoke-NativeCommand -Description 'npm ci' -Command $toolchain.NpmPath -Arguments @('ci', '--ignore-scripts', '--no-audit', '--no-fund')
 
         $patchArguments = @()
         if (Test-Path -LiteralPath $DestinationDir -PathType Container) {
@@ -449,6 +532,15 @@ function Main {
         Write-Host "     in: $projectDir"
         Invoke-NativeCommand -Description 'the Windows patcher' -Command $toolchain.PythonCommand -Arguments $patcherArguments
     } finally {
+        # Assigning $null removes the variable when it was not set before.
+        $env:PYTHONIOENCODING = $previousIoEncoding
+        if ($null -ne $previousOutputEncoding) {
+            try {
+                [Console]::OutputEncoding = $previousOutputEncoding
+            } catch {
+                # Same condition as above; nothing was changed, so nothing needs restoring.
+            }
+        }
         Pop-Location
     }
 
@@ -466,8 +558,19 @@ function Main {
     Write-Host "Installed successfully: $DestinationDir"
 }
 
-# Dot-sourcing with CODEX_SUBSCRIPTION_ROUTER_DRY_RUN=1 only defines the functions above so the
-# repository checks can exercise them without installing anything.
-if ($env:CODEX_SUBSCRIPTION_ROUTER_DRY_RUN -ne '1') {
-    Main
+} # end of $installer
+
+# Dot-sourcing with CODEX_SUBSCRIPTION_ROUTER_DRY_RUN=1 only defines the functions above, in the
+# caller's scope, so the repository checks can exercise them without installing anything.
+# Otherwise the definitions and Main run together in one anonymous scope that ends with the run
+# (see the comment where the block starts).
+if ($env:CODEX_SUBSCRIPTION_ROUTER_DRY_RUN -eq '1') {
+    . $installer
+} else {
+    try {
+        & { . $installer; Main }
+    } finally {
+        # The block variable is the one thing defined outside that scope; drop it as well.
+        Remove-Variable -Name installer
+    }
 }

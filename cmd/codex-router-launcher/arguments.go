@@ -33,7 +33,7 @@ func launcherCommand(launcherPath, appData string, args []string) (executable st
 		return "", nil, errors.New("launcher path is empty")
 	}
 	if appData == "" {
-		return "", nil, errors.New("APPDATA is not set and no user configuration directory is available")
+		return "", nil, errors.New("APPDATA is not set")
 	}
 	// Check both separators regardless of host OS: this also runs in tests on
 	// macOS and Linux, and a Windows executable name never contains either.

@@ -19,7 +19,8 @@ Differences from the macOS patcher (scripts/patch_app.py), on purpose:
 - Computer Use identity is not patched and the managed Computer Use service
   is not pinned: the Swift helper is macOS-only and no Windows helper has
   been verified. The copy is pointed at a named pipe the official app never
-  uses so the two builds cannot share a helper by accident.
+  uses (a fixed prefix plus a fresh UUID per launch) so the two builds cannot
+  share a helper by accident and no other local account can pre-create it.
 - The launcher is a Go program (cmd/codex-router-launcher) built as
   "Codex Subscription Router.exe" beside the Electron executable.
 - The URL scheme is retargeted in the main-process bundles (Windows registers
@@ -41,7 +42,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Mapping
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 # The module is both a script (python scripts\patch_app_windows.py) and an
 # import target for the tests, which discover from the scripts directory.
@@ -65,7 +66,13 @@ INTEGRITY_ASAR_FILE = "resources\\app.asar"
 PROTOCOL_SCHEME = "codex-subscription-router"
 DEFAULT_ELECTRON_EXECUTABLE_NAME = "ChatGPT.exe"
 START_MENU_SHORTCUT_NAME = f"{DESTINATION_DIRECTORY_NAME}.lnk"
-COMPUTER_USE_PIPE_PATH = r"\\.\pipe\codex-subscription-router-computer-use"
+# Prefix only: the Windows pipe namespace is machine-global with no per-user
+# scope, so a fixed name could be pre-created by any other local account and
+# answered as a fake helper (the macOS socket gets its protection from the
+# 0700 state root instead). The prelude appends a UUID drawn per launch, so the
+# full name cannot be pre-created, and once the copy has created it the default
+# pipe DACL denies other users FILE_CREATE_PIPE_INSTANCE.
+COMPUTER_USE_PIPE_PREFIX = r"\\.\pipe\codex-subscription-router-computer-use-"
 LONG_PATHS_REGISTRY_KEY = (
     "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem\\LongPathsEnabled"
 )
@@ -118,6 +125,15 @@ SOURCE_CANDIDATE_TEMPLATES: tuple[tuple[str, tuple[str, ...]], ...] = (
 PROTOCOL_CALL_PATTERN = re.compile(
     r"(setAsDefaultProtocolClient|removeAsDefaultProtocolClient|isDefaultProtocolClient)"
     r"\((['\"`])codex\2"
+)
+# Any remaining mention of the one API that writes the registry which is not
+# immediately the retargeted literal call: a variable or constant argument, a
+# different literal, .call/.apply, optional chaining, or an alias. Checked
+# after retargeting; removeAsDefaultProtocolClient only deletes keys that
+# already point at the calling executable and isDefaultProtocolClient only
+# reads, so those two are not registrations and are left to the warning.
+PROTOCOL_REGISTRATION_RESIDUE_PATTERN = re.compile(
+    r"\bsetAsDefaultProtocolClient\b(?!\((['\"`])" + re.escape(PROTOCOL_SCHEME) + r"\1)"
 )
 
 
@@ -309,7 +325,32 @@ def select_electron_executable(app_dir: Path, override: str | None) -> Path:
 
 def locate_codex_executable(app_dir: Path, override: str | None) -> Path:
     if override is not None:
+        # The multiplexer is copied over the result and the original renamed
+        # beside it, so the result must be unreachable outside the staged
+        # copy: pathlib discards the left operand when the right one is
+        # anchored (an absolute path, a drive, a leading separator, a UNC
+        # share) and keeps ".." for the OS to resolve, either of which would
+        # patch the official install in place. PureWindowsPath so every kind
+        # of Windows anchor is recognised on any host, including the tests.
+        relative = PureWindowsPath(override)
+        if (
+            not relative.parts
+            or relative.anchor
+            or relative.is_absolute()
+            or ".." in relative.parts
+        ):
+            raise RuntimeError(
+                "--codex-executable must be a relative path inside the source "
+                f"directory, got {override!r}"
+            )
+        if relative.name.lower() != CODEX_EXECUTABLE_NAME:
+            raise RuntimeError(
+                f"--codex-executable must name {CODEX_EXECUTABLE_NAME} (the "
+                f"multiplexer is copied over it), got {override!r}"
+            )
         candidate = app_dir / override
+        if not candidate.resolve().is_relative_to(app_dir.resolve()):
+            raise RuntimeError(f"--codex-executable escapes the source directory: {override!r}")
         if not candidate.is_file():
             raise RuntimeError(f"bundled Codex executable not found: {candidate}")
         return candidate
@@ -403,11 +444,17 @@ def windows_desktop_profile_prelude() -> str:
     There is no verified Computer Use helper on Windows, so instead of
     sharing the official app's pipe the copy is pointed at a named pipe the
     official app never uses; the canonical-refresh skip keeps the copy from
-    rewriting a helper it does not own.
+    rewriting a helper it does not own. The pipe name is COMPUTER_USE_PIPE_PREFIX
+    plus a UUID drawn when the copy starts (see the constant for why), computed
+    in the bootstrap bundle with globalThis.crypto because that bundle is ESM
+    and has no require. The emitted text is deterministic; only the value the
+    running copy sees changes per process, and every child it spawns inherits
+    that value through the environment.
     """
-    computer_use_pipe = json.dumps(COMPUTER_USE_PIPE_PATH)
+    computer_use_pipe_prefix = json.dumps(COMPUTER_USE_PIPE_PREFIX)
     return (
-        f"process.env.SKY_CUA_SERVICE_NATIVE_PIPE_PATH={computer_use_pipe};"
+        f"process.env.SKY_CUA_SERVICE_NATIVE_PIPE_PATH={computer_use_pipe_prefix}"
+        "+globalThis.crypto.randomUUID();"
         "process.env.CODEX_ELECTRON_SKIP_COMPUTER_USE_CANONICAL_REFRESH=`1`;"
     )
 
@@ -469,6 +516,17 @@ def retarget_protocol_scheme(extracted: Path) -> int:
             lambda match: f"{match.group(1)}({match.group(2)}{PROTOCOL_SCHEME}{match.group(2)}",
             bundle,
         )
+        # Fail closed before writing: a registration whose scheme is not the
+        # literal 'codex' (a variable, another literal, an aliased call) was
+        # not retargeted, and on Windows setAsDefaultProtocolClient writes
+        # HKCU\Software\Classes\<scheme> to point at the copy without asking,
+        # so the copy would silently take that scheme over at first launch.
+        if PROTOCOL_REGISTRATION_RESIDUE_PATTERN.search(bundle) is not None:
+            raise RuntimeError(
+                f"{bundle_path.name} calls setAsDefaultProtocolClient with a scheme "
+                f"that is not the literal 'codex'; it was not retargeted and the copy "
+                "would register that scheme for itself - re-derive the anchor"
+            )
         if count:
             bundle_path.write_text(bundle, encoding="utf-8")
             replacements += count
@@ -536,17 +594,49 @@ def asar_command() -> list[str]:
     return [node_executable(), str(ASAR_CLI)]
 
 
+def asar_output(command: list[str]) -> str:
+    """Capture asar's listing as UTF-8, whatever the console code page is.
+
+    asar prints archive paths to the pipe as UTF-8; shared.output leaves the
+    encoding to Python's text mode, which on Windows is the ANSI code page
+    (cp1252, cp932, ...) and either garbles a non-ASCII file name or raises
+    UnicodeDecodeError for bytes that page leaves undefined. The shared helper
+    itself stays untouched so the macOS patcher is byte-identical.
+    """
+    return subprocess.check_output(command, text=True, encoding="utf-8").strip()
+
+
+def run_helper(command: list[str], tool: str) -> subprocess.CompletedProcess:
+    """Run a helper and surface its own diagnostic when it fails.
+
+    subprocess.run(check=True) raises CalledProcessError whose message carries
+    only the exit status, while scripts/win/pe.mjs's runCli and PowerShell
+    write the reason ("not a PE executable", "verification failed: ...") to
+    stderr, which capture_output would otherwise discard; docs/WINDOWS.md
+    promises that a stopped run names the check that failed. Still fail
+    closed: every non-zero exit raises.
+    """
+    result = subprocess.run(
+        command, check=False, capture_output=True, text=True, encoding="utf-8"
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "no output"
+        raise RuntimeError(f"{tool} failed (exit {result.returncode}): {detail}")
+    return result
+
+
+def helper_json(result: subprocess.CompletedProcess, tool: str) -> object:
+    try:
+        return json.loads(result.stdout)
+    except ValueError as error:
+        raise RuntimeError(f"{tool} did not print JSON: {error}") from error
+
+
 def exe_info(exe: Path) -> dict:
     if not EXE_INFO_SCRIPT.is_file():
         raise RuntimeError(f"missing helper: {EXE_INFO_SCRIPT}")
-    result = subprocess.run(
-        [node_executable(), str(EXE_INFO_SCRIPT), str(exe)],
-        check=True,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    info = json.loads(result.stdout)
+    result = run_helper([node_executable(), str(EXE_INFO_SCRIPT), str(exe)], "exe-info")
+    info = helper_json(result, "exe-info")
     if not isinstance(info, dict):
         raise RuntimeError(f"exe-info did not return an object for {exe}")
     return info
@@ -599,15 +689,28 @@ def powershell_stopped_processes_command(destination: Path) -> list[str]:
     return ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
 
 
-def icacls_command(state_root: Path, username: str) -> list[str]:
-    """Equivalent of chmod 0700: only the user and SYSTEM can reach the state."""
+def icacls_commands(state_root: Path, username: str) -> list[list[str]]:
+    """Equivalent of chmod 0700: only the user and SYSTEM can reach the state.
+
+    Two invocations, in order. /inheritance:r drops only inherited ACEs and
+    /grant:r replaces only the named SIDs' explicit ACEs, so an explicit ACE
+    another principal already held on an existing state root (granted earlier
+    by hand or by a sync tool) would survive them and keep the control token
+    readable. /reset first discards every explicit ACE on the root; it is a
+    separate icacls syntax form, hence its own command. Children pick up the
+    new inheritable ACEs through normal propagation; explicit ACEs on children
+    themselves are out of scope (a /T reset would recurse every account home).
+    """
     return [
-        "icacls",
-        str(state_root),
-        "/inheritance:r",
-        "/grant:r",
-        f"{username}:(OI)(CI)F",
-        "*S-1-5-18:(OI)(CI)F",
+        ["icacls", str(state_root), "/reset"],
+        [
+            "icacls",
+            str(state_root),
+            "/inheritance:r",
+            "/grant:r",
+            f"{username}:(OI)(CI)F",
+            "*S-1-5-18:(OI)(CI)F",
+        ],
     ]
 
 
@@ -636,16 +739,14 @@ def current_username(env: Mapping[str, str]) -> str:
 def harden_state_root(state_root: Path) -> None:
     # Fail closed: a state root readable by other local users would expose
     # the control token and every isolated account's credentials.
-    shared.run(icacls_command(state_root, current_username(os.environ)))
+    for command in icacls_commands(state_root, current_username(os.environ)):
+        shared.run(command)
 
 
 def ensure_destination_processes_stopped(destination: Path) -> None:
-    result = subprocess.run(
+    result = run_helper(
         powershell_stopped_processes_command(destination),
-        check=True,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
+        "process check (Get-CimInstance)",
     )
     pids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     if pids:
@@ -695,7 +796,7 @@ def rewrite_asar_integrity(executable: Path, entry: dict, digest: str) -> str:
         )
     if not SET_ASAR_INTEGRITY_SCRIPT.is_file():
         raise RuntimeError(f"missing helper: {SET_ASAR_INTEGRITY_SCRIPT}")
-    result = subprocess.run(
+    result = run_helper(
         [
             node_executable(),
             str(SET_ASAR_INTEGRITY_SCRIPT),
@@ -703,14 +804,13 @@ def rewrite_asar_integrity(executable: Path, entry: dict, digest: str) -> str:
             str(entry["file"]),
             digest,
         ],
-        check=True,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
+        "set-asar-integrity",
     )
     if result.stderr.strip():
         print(result.stderr.strip(), file=sys.stderr)
-    updated = integrity_entry_for({"asarIntegrity": json.loads(result.stdout)}, entry["file"])
+    updated = integrity_entry_for(
+        {"asarIntegrity": helper_json(result, "set-asar-integrity")}, entry["file"]
+    )
     if updated is None or str(updated.get("value", "")).lower() != digest.lower():
         raise RuntimeError("set-asar-integrity did not record the new asar digest")
     return str(updated["value"])
@@ -794,15 +894,19 @@ def patch_app(
         resources = stage / "resources"
         original_asar = resources / "app.asar"
         print("Patching desktop profile and renderer…")
-        original_listing = shared.output([*asar, "list", "--is-pack", str(original_asar)])
+        original_listing = asar_output([*asar, "list", "--is-pack", str(original_asar)])
         shared.run([*asar, "extract", str(original_asar), str(extracted)])
         shared.isolate_desktop_profile(extracted, windows_desktop_profile_prelude())
         shared.install_ui_test_bridge(extracted)
         protocol_replacements = retarget_protocol_scheme(extracted)
         if protocol_replacements == 0:
+            # Only reachable when no setAsDefaultProtocolClient call exists at
+            # all (a registration the installer performs, say); a call with a
+            # non-literal scheme has already stopped the patch above.
             print(
-                "Warning: no protocol-client registration was retargeted; check after "
-                "launch that the copy did not take over the codex:// handler.",
+                "Warning: the main-process bundles contain no protocol-client call to "
+                "retarget; if the installer registered codex://, check after launch "
+                "that the copy did not take over that handler.",
                 file=sys.stderr,
             )
         else:
@@ -815,7 +919,7 @@ def patch_app(
         if globs is not None:
             pack_command.extend(("--unpack-dir", globs))
         shared.run([*pack_command, str(extracted), str(repacked_asar)])
-        repacked_listing = shared.output([*asar, "list", "--is-pack", str(repacked_asar)])
+        repacked_listing = asar_output([*asar, "list", "--is-pack", str(repacked_asar)])
         verify_unpacked_preserved(original_listing, repacked_listing)
         shutil.copy2(repacked_asar, original_asar)
         repacked_unpacked = temporary_path / "app.asar.unpacked"

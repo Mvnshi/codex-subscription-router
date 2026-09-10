@@ -21,7 +21,8 @@ this project uses [Semantic Versioning](https://semver.org/).
   kill) and
   `codex.real.exe` lookup in the multiplexer; the Node PE helpers
   `scripts/win/exe-info.mjs` and `scripts/win/set-asar-integrity.mjs` for the
-  `INTEGRITY`/`ELECTRONASAR` resource; a `windows` CI job; and
+  `INTEGRITY`/`ELECTRONASAR` resource, on `resedit` 3.1.0 added as an
+  exact-pinned dev dependency; a `windows` CI job; and
   `docs/WINDOWS.md`. No official Windows build has been exercised yet, so
   `--allow-untested-source` is required until one is recorded.
 
@@ -46,14 +47,12 @@ this project uses [Semantic Versioning](https://semver.org/).
   itself with an unpatched official build.
 - `@electron/asar` 4.2.1 → 4.3.0, `actions/checkout` 6.1.0 → 7.0.1, and
   `actions/setup-node` 6.5.0 → 7.0.0.
-- `resedit` 3.1.0 added as an exact-pinned dev dependency for the Windows
-  integrity-resource rewrite. The release check now requires every npm dev
-  dependency to be exact and lock-matched, checks `install.sh`'s executable
-  bit through git's index mode, and rejects tracked `.exe`, `.lnk`, `.msi`,
-  and `.msix` files.
-- CI runs a `macos` job and a `windows` job; the macOS job also
-  cross-compiles the Go packages for Windows.
-
+- The release check now requires every npm dev dependency to be exact and
+  lock-matched, checks `install.sh`'s executable bit through git's index mode,
+  and rejects tracked `.exe`, `.lnk`, `.msi`, and `.msix` files.
+- CI runs a `macos` job (the former `checks` job, renamed; a required
+  status check named `checks` must be updated to `macos`) and a `windows`
+  job; the macOS job also cross-compiles the Go packages for Windows.
 
 ## [0.1.0] - 2026-08-15
 

@@ -21,7 +21,9 @@ import {
   normaliseAsarFileKey,
   normaliseDigest,
   ToolError,
+  UsageError,
   updatedIntegrityList,
+  writeFileAtomically,
 } from "./pe.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -219,6 +221,63 @@ test("only the matching entry changes and non-SHA256 entries are refused", () =>
   );
 });
 
+test("writeFileAtomically leaves the target untouched when verify throws", () => {
+  const directory = freshPath("atomic");
+  fs.mkdirSync(directory);
+  const target = path.join(directory, "target.exe");
+  const oldData = Buffer.from("old executable bytes");
+  const newData = Buffer.from("new executable bytes, longer than the old ones");
+  fs.writeFileSync(target, oldData);
+  // 0o600 survives any umask. Windows only models the read-only bit, so the
+  // expectation is whatever mode the platform reports back, not 0o600 itself.
+  fs.chmodSync(target, 0o600);
+  const mode = fs.statSync(target).mode & 0o7777;
+  const temporaryFiles = () => fs.readdirSync(directory).filter((name) => name.endsWith(".tmp"));
+
+  // verify throws: its error propagates, the temp file is removed, the target
+  // is byte-identical. verify must have seen the new bytes on disk while the
+  // target still held the old ones (that is the point of verifying first).
+  const failure = new Error("verification says no");
+  let seen = null;
+  assert.throws(
+    () =>
+      writeFileAtomically(target, newData, (temporaryPath) => {
+        seen = {
+          directory: path.dirname(temporaryPath),
+          isTemp: temporaryPath.endsWith(".tmp"),
+          temporaryBytes: fs.readFileSync(temporaryPath),
+          targetBytes: fs.readFileSync(target),
+        };
+        throw failure;
+      }),
+    (error) => error === failure,
+  );
+  assert.notEqual(seen, null, "verify was called");
+  assert.equal(seen.directory, directory, "temp file is a sibling of the target");
+  assert.ok(seen.isTemp);
+  assert.ok(seen.temporaryBytes.equals(newData), "verify sees the new bytes on disk");
+  assert.ok(seen.targetBytes.equals(oldData), "target not yet replaced during verify");
+  assert.ok(fs.readFileSync(target).equals(oldData), "target untouched after failure");
+  assert.equal(fs.statSync(target).mode & 0o7777, mode);
+  assert.deepEqual(temporaryFiles(), [], "temp file removed after failure");
+
+  // Success over an existing file: bytes replaced, mode preserved, temp renamed away.
+  writeFileAtomically(target, newData);
+  assert.ok(fs.readFileSync(target).equals(newData));
+  assert.equal(fs.statSync(target).mode & 0o7777, mode, "existing mode preserved");
+  assert.deepEqual(temporaryFiles(), []);
+
+  // A directory that does not exist is the operator's mistake: a usage error,
+  // and nothing is created on the way to discovering it.
+  const missing = path.join(directory, "no-such-dir", "out.exe");
+  assert.throws(
+    () => writeFileAtomically(missing, newData),
+    (error) => error instanceof UsageError && /cannot write/.test(error.message),
+  );
+  assert.equal(fs.existsSync(path.dirname(missing)), false);
+  assert.deepEqual(temporaryFiles(), []);
+});
+
 // ---------------------------------------------------------------------------
 // CLI behaviour against a real cross-compiled executable
 
@@ -349,6 +408,10 @@ test("set-asar-integrity usage errors exit 2", { skip }, () => {
   expectFailure(SET_ASAR_INTEGRITY, [file, APP_ASAR, NEW_DIGEST, "--output"], 2);
   expectFailure(SET_ASAR_INTEGRITY, [file, APP_ASAR, NEW_DIGEST, "--bogus"], 2);
   expectFailure(SET_ASAR_INTEGRITY, [path.join(workspace, "missing.exe"), APP_ASAR, NEW_DIGEST], 2);
+  const unwritable = path.join(workspace, "no-such-dir", "out.exe");
+  const stderr = expectFailure(SET_ASAR_INTEGRITY, [file, APP_ASAR, NEW_DIGEST, "--output", unwritable], 2);
+  assert.match(stderr, /cannot write/);
+  assert.doesNotMatch(stderr, /\n\s+at /, "a usage error prints no stack trace");
   assert.equal(exeInfo(file).asarIntegrity[0].value, OLD_APP_DIGEST, "input untouched");
 });
 

@@ -83,8 +83,12 @@ TEXT_SUFFIXES = {
 }
 # Both patchers run whatever `npm ci` installs, so every build-time npm
 # dependency must be pinned to one exact version that the lock file agrees on;
-# a range would let a release build pick up an unreviewed version.
-EXACT_DEV_DEPENDENCIES = ("@electron/asar", "resedit")
+# a range would let a release build pick up an unreviewed version. main()
+# checks every devDependency named in package.json or in the lock file's root
+# entry, not a fixed list, so a third package added with a range cannot slip
+# through; this tuple only asserts that the two packages the patchers invoke
+# are declared at all.
+REQUIRED_DEV_DEPENDENCIES = ("@electron/asar", "resedit")
 MACOS_USER_PREFIX = "/" + "Users" + "/"
 
 
@@ -95,6 +99,8 @@ def fail(message: str) -> None:
 
 def require_exact_dev_dependency(package: dict, lock: dict, name: str) -> None:
     declared = package.get("devDependencies", {}).get(name)
+    if declared is None:
+        fail(f"package-lock.json declares dev dependency {name}, package.json does not")
     if not isinstance(declared, str) or re.fullmatch(r"\d+\.\d+\.\d+", declared) is None:
         fail(f"{name} must use an exact version")
     lock_packages = lock.get("packages", {})
@@ -140,7 +146,23 @@ def main() -> int:
     lock_root_version = lock.get("packages", {}).get("", {}).get("version")
     if lock.get("version") != version or lock_root_version != version:
         fail("package-lock.json version does not match VERSION")
-    for name in EXACT_DEV_DEPENDENCIES:
+    declared_dev_dependencies = package.get("devDependencies")
+    if not isinstance(declared_dev_dependencies, dict):
+        fail("package.json has no devDependencies object")
+    for name in REQUIRED_DEV_DEPENDENCIES:
+        if name not in declared_dev_dependencies:
+            fail(f"package.json does not declare dev dependency {name}")
+    # `npm ci` installs runtime dependencies too, but only devDependencies are
+    # checked for exact pins; this repository is build tooling and has none.
+    if package.get("dependencies"):
+        fail(
+            "package.json declares runtime dependencies; declare build tooling under "
+            "devDependencies so the exact-version check covers it"
+        )
+    lock_root_dev_dependencies = lock.get("packages", {}).get("", {}).get("devDependencies", {})
+    if not isinstance(lock_root_dev_dependencies, dict):
+        fail("package-lock.json root entry has no devDependencies object")
+    for name in sorted(set(declared_dev_dependencies) | set(lock_root_dev_dependencies)):
         require_exact_dev_dependency(package, lock, name)
     if package.get("license") != "MIT":
         fail("package.json license does not match LICENSE")

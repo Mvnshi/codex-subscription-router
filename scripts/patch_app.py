@@ -118,8 +118,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run(command: list[str], *, cwd: Path | None = None) -> None:
-    subprocess.run(command, cwd=cwd, check=True)
+def run(
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> None:
+    subprocess.run(command, cwd=cwd, env=env, check=True)
 
 
 def output(command: list[str]) -> str:
@@ -814,21 +819,45 @@ def load_or_create_token() -> str:
     return token
 
 
-def build_proxy(destination: Path) -> None:
+def build_go_program(
+    destination: Path,
+    package_path: str,
+    *,
+    goos: str | None = None,
+    goarch: str | None = None,
+    ldflags: str = "-s -w",
+) -> None:
+    """Build one Go package from this repository into destination.
+
+    GOOS/GOARCH are only placed in the environment when given so the native
+    build (macOS) keeps using whatever the caller's shell already provides.
+    """
     destination.parent.mkdir(parents=True, exist_ok=True)
+    env: dict[str, str] | None = None
+    if goos is not None or goarch is not None:
+        env = dict(os.environ)
+        if goos is not None:
+            env["GOOS"] = goos
+        if goarch is not None:
+            env["GOARCH"] = goarch
     run(
         [
             "go",
             "build",
             "-trimpath",
-            "-ldflags=-s -w",
+            f"-ldflags={ldflags}",
             "-o",
             str(destination),
-            "./cmd/codex-mux",
+            package_path,
         ],
         cwd=PROJECT_ROOT,
+        env=env,
     )
     destination.chmod(destination.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def build_proxy(destination: Path) -> None:
+    build_go_program(destination, "./cmd/codex-mux")
 
 
 def install_launcher(app: Path) -> None:
@@ -1811,17 +1840,37 @@ def disable_updater_lifecycle(extracted: Path) -> None:
     bundle_path.write_text(bundle, encoding="utf-8")
 
 
-def patch_desktop_profile(
-    extracted: Path, installed_computer_use_app: Path
-) -> None:
-    """Give the copied Electron app its own user-data and single-instance scope."""
-    bootstrap_files = list((extracted / ".vite" / "build").glob("bootstrap-*.js"))
-    if len(bootstrap_files) != 1:
-        raise RuntimeError(
-            f"expected one ChatGPT bootstrap bundle, found {len(bootstrap_files)}"
-        )
+def single_bundle(extracted: Path, pattern: str, what: str) -> Path:
+    """Return the one .vite/build bundle matching pattern or fail closed."""
+    matches = list((extracted / ".vite" / "build").glob(pattern))
+    if len(matches) != 1:
+        raise RuntimeError(f"expected one {what}, found {len(matches)}")
+    return matches[0]
 
-    bootstrap_path = bootstrap_files[0]
+
+def macos_desktop_profile_prelude(installed_computer_use_app: Path) -> str:
+    """Environment the copied app needs before its userData path is redirected.
+
+    The Computer Use helper socket and app paths point at this build's own
+    helper so the copy never shares the official app's helper or its grants.
+    """
+    computer_use_pipe = json.dumps(str(DEFAULT_STATE_ROOT / "computer-use.sock"))
+    computer_use_app = json.dumps(str(installed_computer_use_app))
+    return (
+        f"process.env.SKY_CUA_SERVICE_NATIVE_PIPE_PATH={computer_use_pipe};"
+        f"process.env.SKY_CUA_SERVICE_PATH={computer_use_app};"
+        f"process.env.CODEX_ELECTRON_COMPUTER_USE_APP_PATH={computer_use_app};"
+        "process.env.CODEX_ELECTRON_SKIP_COMPUTER_USE_CANONICAL_REFRESH=`1`;"
+    )
+
+
+def isolate_desktop_profile(extracted: Path, prelude: str) -> None:
+    """Give the copied Electron app its own user-data and single-instance scope.
+
+    prelude is JavaScript inserted immediately before the userData rewrite;
+    each platform supplies the environment its helper layout needs.
+    """
+    bootstrap_path = single_bundle(extracted, "bootstrap-*.js", "ChatGPT bootstrap bundle")
     bootstrap = bootstrap_path.read_text(encoding="utf-8")
     profile_pattern = re.compile(
         r"(?P<electron>[A-Za-z_$][\w$]*)\.app\.setPath\("
@@ -1832,14 +1881,9 @@ def patch_desktop_profile(
 
     def replacement(match: re.Match[str]) -> str:
         electron = match.group("electron")
-        computer_use_pipe = json.dumps(str(DEFAULT_STATE_ROOT / "computer-use.sock"))
-        computer_use_app = json.dumps(str(installed_computer_use_app))
         return (
-            f"process.env.SKY_CUA_SERVICE_NATIVE_PIPE_PATH={computer_use_pipe};"
-            f"process.env.SKY_CUA_SERVICE_PATH={computer_use_app};"
-            f"process.env.CODEX_ELECTRON_COMPUTER_USE_APP_PATH={computer_use_app};"
-            "process.env.CODEX_ELECTRON_SKIP_COMPUTER_USE_CANONICAL_REFRESH=`1`;"
-            f"{electron}.app.setPath(`userData`,"
+            prelude
+            + f"{electron}.app.setPath(`userData`,"
             f"{electron}.app.getPath(`appData`)+`/{DESKTOP_PROFILE_NAME}`)"
         )
 
@@ -1858,12 +1902,16 @@ def patch_desktop_profile(
     bootstrap_path.write_text(bootstrap, encoding="utf-8")
     disable_updater_lifecycle(extracted)
 
-    main_files = list((extracted / ".vite" / "build").glob("main-*.js"))
-    if len(main_files) != 1:
-        raise RuntimeError(
-            f"expected one ChatGPT desktop main bundle, found {len(main_files)}"
-        )
-    main_path = main_files[0]
+
+def pin_managed_computer_use(
+    extracted: Path, installed_computer_use_app: Path
+) -> None:
+    """Point the managed Computer Use service at this build's own helper app.
+
+    macOS only: the helper, its socket, and the strict tool instruction are
+    specific to the Swift service the macOS patcher re-signs.
+    """
+    main_path = single_bundle(extracted, "main-*.js", "ChatGPT desktop main bundle")
     main = main_path.read_text(encoding="utf-8")
     managed_service_pattern = re.compile(
         r"(?P<prefix>[A-Za-z_$][\w$]*=new [A-Za-z_$][\w$]*\()"
@@ -1901,6 +1949,13 @@ def patch_desktop_profile(
         strict_computer_use_instruction,
         1,
     )
+    main_path.write_text(main, encoding="utf-8")
+
+
+def install_ui_test_bridge(extracted: Path) -> None:
+    """Ship the loopback UI test bridge; it only starts under CODEX_MUX_UI_TESTS=1."""
+    main_path = single_bundle(extracted, "main-*.js", "ChatGPT desktop main bundle")
+    main = main_path.read_text(encoding="utf-8")
     ui_test_bridge = extracted / ".vite" / "build" / "ui-test-bridge.cjs"
     shutil.copy2(PROJECT_ROOT / "ui" / "ui-test-bridge.cjs", ui_test_bridge)
     main += (
@@ -1908,6 +1963,17 @@ def patch_desktop_profile(
         "require(require(`node:path`).join(__dirname,`ui-test-bridge.cjs`)).start();"
     )
     main_path.write_text(main, encoding="utf-8")
+
+
+def patch_desktop_profile(
+    extracted: Path, installed_computer_use_app: Path
+) -> None:
+    """Give the copied Electron app its own user-data and single-instance scope."""
+    isolate_desktop_profile(
+        extracted, macos_desktop_profile_prelude(installed_computer_use_app)
+    )
+    pin_managed_computer_use(extracted, installed_computer_use_app)
+    install_ui_test_bridge(extracted)
 
 
 def patch_info_plist(

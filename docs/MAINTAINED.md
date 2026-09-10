@@ -15,8 +15,8 @@ commits are preserved with their original authorship.
 - [Upstream PR #25](https://github.com/b-nnett/codex-subscription-router/pull/25):
   signing-team detection and regression tests.
 
-Beyond those: plugin RPC account scoping for the newer native method names, and
-build 8109 support.
+Beyond those: plugin RPC account scoping for the newer native method names,
+build 8109 support, and a provisional Windows port ([WINDOWS.md](WINDOWS.md)).
 
 ## Supported builds
 
@@ -24,7 +24,9 @@ Versions and `app.asar` hashes are in [COMPATIBILITY.md](COMPATIBILITY.md).
 Unsupported source builds are rejected unless `--allow-untested-source` is
 passed. Build 8109 is provisional — it patches, signs and launches, and loads
 connected accounts, but multi-account routing has not been exercised on it.
-See [BUILD-8109-PORT.md](BUILD-8109-PORT.md).
+See [BUILD-8109-PORT.md](BUILD-8109-PORT.md). No Windows build is recorded at
+all: the Windows patcher refuses every source until `--allow-untested-source`
+is passed.
 
 ## Known gaps
 
@@ -36,6 +38,10 @@ See [BUILD-8109-PORT.md](BUILD-8109-PORT.md).
 3. Model-aware routing needs timeout, transient-error, missing-model,
    pagination, failover and sticky-ownership tests before integration.
 4. The signed desktop smoke matrix should run before any release tag.
+5. Windows: exercise against an official build. The port is implemented and
+   unit-tested on Linux and in CI but has never been launched against an
+   official Windows build; record the first one as described in
+   [WINDOWS.md](WINDOWS.md).
 
 ## Install
 

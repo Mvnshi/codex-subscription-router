@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -21,6 +22,7 @@ REQUIRED_FILES = (
     "README.md",
     "SECURITY.md",
     "VERSION",
+    "install.ps1",
     "install.sh",
     "docs/ARCHITECTURE.md",
     "docs/COMPATIBILITY.md",
@@ -28,8 +30,12 @@ REQUIRED_FILES = (
     "docs/RELEASING.md",
     "docs/SECURITY-MODEL.md",
     "docs/SMOKE-TEST.md",
+    "docs/WINDOWS.md",
     "package-lock.json",
     "package.json",
+    "scripts/patch_app_windows.py",
+    "scripts/win/exe-info.mjs",
+    "scripts/win/set-asar-integrity.mjs",
 )
 CURATED_SCREENSHOTS = (
     "screenshots/account-menu.png",
@@ -39,12 +45,18 @@ CURATED_SCREENSHOTS = (
     "screenshots/quota-all-depleted.png",
     "screenshots/rate-limit-reset-accounts.png",
 )
+# Build outputs, installers, and credentials for either platform. Releases are
+# source-only; a tracked .exe or .lnk would ship a machine-specific binary.
 FORBIDDEN_TRACKED_SUFFIXES = {
     ".asar",
     ".cer",
     ".dmg",
+    ".exe",
     ".key",
+    ".lnk",
     ".mobileprovision",
+    ".msi",
+    ".msix",
     ".p12",
     ".pem",
     ".pfx",
@@ -53,13 +65,63 @@ FORBIDDEN_TRACKED_SUFFIXES = {
     ".zip",
 }
 FORBIDDEN_TRACKED_NAMES = {".env", "auth.json", "control-token", "state.json"}
-TEXT_SUFFIXES = {"", ".c", ".go", ".json", ".js", ".cjs", ".md", ".py", ".toml", ".yml", ".yaml"}
+TEXT_SUFFIXES = {
+    "",
+    ".c",
+    ".go",
+    ".json",
+    ".js",
+    ".cjs",
+    ".mjs",
+    ".md",
+    ".ps1",
+    ".py",
+    ".sh",
+    ".toml",
+    ".yml",
+    ".yaml",
+}
+# Both patchers run whatever `npm ci` installs, so every build-time npm
+# dependency must be pinned to one exact version that the lock file agrees on;
+# a range would let a release build pick up an unreviewed version.
+EXACT_DEV_DEPENDENCIES = ("@electron/asar", "resedit")
 MACOS_USER_PREFIX = "/" + "Users" + "/"
 
 
 def fail(message: str) -> None:
     print(f"release check: {message}", file=sys.stderr)
     raise SystemExit(1)
+
+
+def require_exact_dev_dependency(package: dict, lock: dict, name: str) -> None:
+    declared = package.get("devDependencies", {}).get(name)
+    if not isinstance(declared, str) or re.fullmatch(r"\d+\.\d+\.\d+", declared) is None:
+        fail(f"{name} must use an exact version")
+    lock_packages = lock.get("packages", {})
+    if lock_packages.get("", {}).get("devDependencies", {}).get(name) != declared:
+        fail(f"package-lock.json root does not declare {name} {declared}")
+    if lock_packages.get(f"node_modules/{name}", {}).get("version") != declared:
+        fail(f"package-lock.json does not match the declared {name} version")
+
+
+def require_tracked_executable(relative: str) -> None:
+    """Require git's executable mode, which is what a source release ships.
+
+    The filesystem bit is checked additionally on POSIX. It cannot be checked
+    on Windows: Python reports an executable bit there only for .exe/.bat/
+    .cmd/.com names, and Git for Windows checks out with core.fileMode=false,
+    so the index mode is the only meaningful record on that platform.
+    """
+    listing = subprocess.check_output(
+        ["git", "ls-files", "--stage", "--", relative], cwd=ROOT, text=True
+    ).strip()
+    if not listing:
+        fail(f"{relative} is not tracked")
+    mode = listing.split()[0]
+    if mode != "100755":
+        fail(f"{relative} is tracked with mode {mode}, expected 100755")
+    if os.name == "posix" and not ((ROOT / relative).stat().st_mode & 0o111):
+        fail(f"{relative} is not executable")
 
 
 def main() -> int:
@@ -78,16 +140,11 @@ def main() -> int:
     lock_root_version = lock.get("packages", {}).get("", {}).get("version")
     if lock.get("version") != version or lock_root_version != version:
         fail("package-lock.json version does not match VERSION")
-    asar_version = package.get("devDependencies", {}).get("@electron/asar")
-    locked_asar = lock.get("packages", {}).get("node_modules/@electron/asar", {})
-    if not isinstance(asar_version, str) or re.fullmatch(r"\d+\.\d+\.\d+", asar_version) is None:
-        fail("@electron/asar must use an exact version")
-    if locked_asar.get("version") != asar_version:
-        fail("package-lock.json does not match the declared @electron/asar version")
+    for name in EXACT_DEV_DEPENDENCIES:
+        require_exact_dev_dependency(package, lock, name)
     if package.get("license") != "MIT":
         fail("package.json license does not match LICENSE")
-    if not ((ROOT / "install.sh").stat().st_mode & 0o111):
-        fail("install.sh is not executable")
+    require_tracked_executable("install.sh")
 
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     dated_heading = rf"^## \[{re.escape(version)}\] - \d{{4}}-\d{{2}}-\d{{2}}$"

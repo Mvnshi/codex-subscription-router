@@ -11,6 +11,11 @@ __pycache__/
 *.pkg
 *.pfx
 *.zip
+# Windows build outputs and installers are never source.
+*.exe
+*.lnk
+*.msi
+*.msix
 .codex-mux/
 auth.json
 control-token

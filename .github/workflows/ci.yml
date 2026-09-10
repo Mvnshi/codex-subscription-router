@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  checks:
+  macos:
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
@@ -37,8 +37,18 @@ jobs:
       - name: Vet Go packages
         run: go vet ./...
 
+      - name: Cross-compile Go packages for Windows
+        run: GOOS=windows GOARCH=amd64 go build ./...
+
+      # The Windows PE helper tests import the pinned resedit package.
+      - name: Install locked build tools
+        run: npm ci --ignore-scripts
+
       - name: Check JavaScript syntax
         run: npm run check:js
+
+      - name: Check Windows PE helpers
+        run: npm run check:win
 
       - name: Check Python syntax
         run: npm run check:python
@@ -51,3 +61,83 @@ jobs:
 
       - name: Check release metadata
         run: npm run release:check
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.12"
+          package-manager-cache: false
+
+      # No pinned actions/setup-python exists in this repository; the runner
+      # image's own Python is used. The npm scripts call `python3`, which the
+      # Windows image does not reliably expose, so every Python step below
+      # invokes `python` directly. Fail here, visibly, if it is missing.
+      - name: Show toolchain versions
+        shell: bash
+        run: |
+          go version
+          node --version
+          npm --version
+          python --version
+
+      - name: Test Go packages
+        shell: bash
+        run: go test ./...
+
+      - name: Vet Go packages
+        shell: bash
+        run: go vet ./...
+
+      - name: Build Go packages
+        shell: bash
+        run: go build ./...
+
+      - name: Install locked build tools
+        shell: bash
+        run: npm ci --ignore-scripts
+
+      - name: Check JavaScript syntax
+        shell: bash
+        run: npm run check:js
+
+      - name: Check Windows PE helpers
+        shell: bash
+        run: npm run check:win
+
+      - name: Check Python syntax
+        shell: bash
+        run: |
+          python -m py_compile scripts/patch_app.py scripts/patch_app_windows.py scripts/check_release.py
+          python -m unittest discover -s scripts -p "test_*.py"
+
+      - name: Check PowerShell installer syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          $installer = (Resolve-Path -LiteralPath 'install.ps1').Path
+          [System.Management.Automation.Language.Parser]::ParseFile($installer, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Host $_.Message }
+            exit 1
+          }
+          Write-Host 'install.ps1 parsed without errors'
+
+      - name: Check release metadata
+        shell: bash
+        run: python scripts/check_release.py

@@ -3,13 +3,14 @@
 ## Trust boundaries
 
 - The official ChatGPT app is trusted build input and remains unchanged.
-- The patcher has local filesystem and code-signing access by design.
+- The patchers have local filesystem access by design; the macOS patcher also
+  has code-signing access.
 - Each real Codex child is trusted with only its assigned account home.
 - The injected renderer is trusted with the loopback control token.
 - Other local users and remote origins are outside the control API boundary.
-- Processes running as the same macOS user are not considered isolated from
-  one another; they can already read that user's app data subject to macOS
-  permissions.
+- Processes running as the same macOS or Windows user are not considered
+  isolated from one another; they can already read that user's app data
+  subject to macOS permissions or NTFS ACLs.
 
 ## Credentials
 
@@ -60,3 +61,47 @@ the same control token. Release workflows never set this variable.
 
 Releases contain source only. Publishing the patched `.app`, the official ASAR,
 or any extracted OpenAI binary is outside this project's release process.
+
+## Windows
+
+The Windows port is provisional (see [WINDOWS.md](WINDOWS.md)); the properties
+below describe what the code does, not what has been observed on an official
+build.
+
+- **No code signature on the copy.** Recording the repacked archive's header
+  digest means rewriting the executable's `INTEGRITY`/`ELECTRONASAR` resource,
+  and the PE library used for that drops the Authenticode signature. The
+  copied Electron executable, the Go launcher, and the Go multiplexer are all
+  unsigned. SmartScreen may warn on first launch. There is no `codesign
+  --verify` equivalent; `node scripts/win/exe-info.mjs <exe>` reports
+  `signed: false` and the recorded integrity value, nothing more.
+- **State root ACL.** The patcher runs
+  `icacls %USERPROFILE%\.codex-mux /inheritance:r /grant:r <DOMAIN\user>:(OI)(CI)F *S-1-5-18:(OI)(CI)F`
+  before writing anything under it: inheritance is removed and only the
+  current user and SYSTEM keep access. `(OI)(CI)` makes files and directories
+  created later (state, account homes, backups) inherit that ACL. The install
+  stops if `icacls` fails.
+- **POSIX modes are no-ops.** The multiplexer's `0700`/`0600` modes and the
+  control-token permission repair on startup only toggle the read-only
+  attribute on Windows. Protection of the state root therefore comes from the
+  install-time ACL and NTFS inheritance, not from the mux. The Primary home
+  `%USERPROFILE%\.codex` belongs to the official app and is not re-ACLed.
+- **Control server unchanged.** It binds `127.0.0.1:48123` and requires the
+  same random 256-bit token; the token lives in `%USERPROFILE%\.codex-mux`.
+- **Same-user processes are not isolated** from each other, as on macOS. The
+  copy is installed per user under `%LOCALAPPDATA%\Programs`, so any process
+  running as that user can modify it; the installer refuses to run elevated.
+- **Computer Use.** No Windows helper is patched or shipped. The copy's
+  `SKY_CUA_SERVICE_NATIVE_PIPE_PATH` is set to
+  `\\.\pipe\codex-subscription-router-computer-use`, a named pipe the
+  official app never uses, so the copy cannot attach to the official helper's
+  pipe by accident; nothing listens there.
+- **Protocol handler.** The copy registers `codex-subscription-router://`
+  instead of `codex://` (registry keys under `HKCU\Software\Classes`), so
+  deep links keep opening the official app. The patcher warns rather than
+  fails when it finds no registration call to retarget; the smoke test checks
+  the handler after launch.
+- **Profile isolation.** The launcher passes
+  `--user-data-dir=%APPDATA%\Codex Subscription Router` and the main process
+  sets the same `userData`; Electron's single-instance lock is scoped to that
+  profile, so the copy and the official app run side by side.

@@ -38,8 +38,16 @@ jobs:
           test "${GITHUB_REF_NAME}" = "v${version}"
           npm run release:check
 
+      # `npm run check` includes the Windows PE helper tests, which import the
+      # pinned resedit package.
+      - name: Install locked build tools
+        run: npm ci --ignore-scripts
+
       - name: Run checks
         run: npm run check
+
+      - name: Cross-compile Go packages for Windows
+        run: GOOS=windows GOARCH=amd64 go build ./...
 
       - name: Create source-only GitHub release
         env:

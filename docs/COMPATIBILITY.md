@@ -22,3 +22,21 @@ it is unverified. The patcher rejects a version, build, or ASAR hash mismatch by
 default; `--allow-untested-source` is an explicit diagnostic override. Never
 weaken an anchor-count or binary-constant check merely to make a new build
 complete. Review the upstream change and update the patch deliberately.
+
+## Windows (provisional)
+
+| Official version | FileVersion | `app.asar` SHA-256 |
+| --- | --- | --- |
+
+No row exists yet: no official Windows build has been exercised, so
+`TESTED_WINDOWS_SOURCE_BUILDS` in `scripts/patch_app_windows.py` is empty and
+the Windows patcher refuses every source unless `--allow-untested-source` is
+passed. The key is the `(ProductVersion, FileVersion)` pair from the Electron
+executable's version resource; the hash is the SHA-256 of the whole official
+`resources\app.asar`, as printed on the patcher's identity line.
+
+| Component | Tested value |
+| --- | --- |
+| Architecture | `x64` / `arm64` (untested) |
+
+The procedure for recording the first build is in [WINDOWS.md](WINDOWS.md).

@@ -28,7 +28,7 @@ import { Format, NtExecutable, NtExecutableResource, Resource } from "resedit";
 
 /** Exit status for logical failures (missing resource, no match, bad digest). */
 export const EXIT_FAILURE = 1;
-/** Exit status for usage errors (wrong arguments, unreadable file, not a PE). */
+/** Exit status for usage errors (wrong arguments, unreadable input, unwritable output, not a PE). */
 export const EXIT_USAGE = 2;
 
 /** Resource type and name Electron looks up with FindResource on Windows. */
@@ -75,8 +75,14 @@ export function decodeVersionNumber(mostSignificant, leastSignificant) {
 /**
  * Key used to match a caller-supplied asar path against resource entries.
  * Callers may pass "resources/app.asar" while packager stores
- * "resources\\app.asar"; the stored value itself is never rewritten, so
- * Electron's own (separator- and case-sensitive) comparison is unaffected.
+ * "resources\\app.asar". Electron (shell/common/asar/archive_win.cc,
+ * LoadIntegrityConfig and HeaderIntegrity, v30 through main) lower-cases
+ * both the stored "file" and the relative path it looks up, but never
+ * normalises separators; so lower-casing here matches Electron exactly and
+ * folding separators only forgives the operator's spelling. The stored value
+ * itself is never rewritten. Electron inserts entries last-wins, so two
+ * stored keys differing only by case silently collide there; that is why
+ * updatedIntegrityList refuses more than one match instead of picking one.
  */
 export function normaliseAsarFileKey(file) {
   return file.replace(/\\/g, "/").toLowerCase();
@@ -215,8 +221,11 @@ export function readIntegrityList(resource) {
 
 /**
  * Validate a caller-supplied SHA-256 digest and return it lower-cased.
- * Electron compares the stored value against base::ToLowerASCII(HexEncode)
- * of the header hash, so an upper-case value would fail every launch.
+ * Case does not affect launch: archive_win.cc LoadIntegrityConfig stores
+ * base::ToLowerASCII(value) and asar_util.cc ValidateIntegrityOrDie compares
+ * it against lower-case HexEncode output. We lower-case anyway so the value
+ * we write, re-read, verify and print is byte-identical to what Electron
+ * caches and to what @electron/packager emits.
  */
 export function normaliseDigest(digest) {
   if (typeof digest !== "string" || !SHA256_HEX.test(digest)) {
@@ -294,7 +303,8 @@ export function versionInfoOf(resource) {
  * Write `data` to `targetPath` via a sibling temp file and rename, so a
  * crash or a failed check never leaves a half-written executable behind.
  * `verify(temporaryPath)` runs on the on-disk bytes BEFORE the rename; if it
- * throws, the temp file is removed and the target is untouched.
+ * throws, the temp file is removed and the target is untouched. A directory
+ * that does not exist or cannot be written is a UsageError.
  */
 export function writeFileAtomically(targetPath, data, verify = () => {}) {
   const directory = path.dirname(targetPath);
@@ -306,8 +316,16 @@ export function writeFileAtomically(targetPath, data, verify = () => {}) {
   } catch {
     // New file: keep the executable default.
   }
+  let descriptor;
   try {
-    const descriptor = fs.openSync(temporaryPath, "wx", mode);
+    descriptor = fs.openSync(temporaryPath, "wx", mode);
+  } catch (error) {
+    // A missing or unwritable output directory is the operator's --output
+    // argument, not a bug: report it as a usage error (exit 2, no stack
+    // trace), the same way readExecutable treats an unreadable input.
+    throw new UsageError(`cannot write ${temporaryPath}: ${error.message}`);
+  }
+  try {
     try {
       fs.writeFileSync(descriptor, data);
       fs.fsyncSync(descriptor);

@@ -75,12 +75,20 @@ build.
   unsigned. SmartScreen may warn on first launch. There is no `codesign
   --verify` equivalent; `node scripts/win/exe-info.mjs <exe>` reports
   `signed: false` and the recorded integrity value, nothing more.
-- **State root ACL.** The patcher runs
-  `icacls %USERPROFILE%\.codex-mux /inheritance:r /grant:r <DOMAIN\user>:(OI)(CI)F *S-1-5-18:(OI)(CI)F`
-  before writing anything under it: inheritance is removed and only the
-  current user and SYSTEM keep access. `(OI)(CI)` makes files and directories
-  created later (state, account homes, backups) inherit that ACL. The install
-  stops if `icacls` fails.
+- **State root ACL.** The patcher creates `%USERPROFILE%\.codex-mux` and
+  writes `control-token` into it (`load_or_create_token`, shared with macOS),
+  then immediately, before anything else is installed, runs
+  `icacls %USERPROFILE%\.codex-mux /inheritance:r /grant:r <DOMAIN\user>:(OI)(CI)F *S-1-5-18:(OI)(CI)F`:
+  inheritance is removed and only the current user and SYSTEM keep access.
+  `icacls` recomputes the inherited ACEs of the token already inside, and
+  `(OI)(CI)` makes files and directories created later under the root (state,
+  account homes, the `backups\<timestamp>\` directory) inherit that ACL.
+  Until `icacls` has run, the token carries the ACL inherited from
+  `%USERPROFILE%` (by default the current user, Administrators, and SYSTEM).
+  A previous install is moved into the backup directory with a same-volume
+  rename, so that tree keeps the ACL it had under `%LOCALAPPDATA%\Programs`
+  (the same three principals by default) rather than inheriting the root's.
+  The install stops if `icacls` fails.
 - **POSIX modes are no-ops.** The multiplexer's `0700`/`0600` modes and the
   control-token permission repair on startup only toggle the read-only
   attribute on Windows. Protection of the state root therefore comes from the

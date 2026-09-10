@@ -24,7 +24,8 @@
 //
 // Exit status: 0 success; 1 the resource is absent, no entry matches (the
 // existing entries are listed), the digest is not 64 hex characters, or a
-// verification failed; 2 usage error (arguments, unreadable file, not a PE).
+// verification failed; 2 usage error (arguments, unreadable file, not a PE,
+// or an --output location whose directory is missing or unwritable).
 
 import path from "node:path";
 import {

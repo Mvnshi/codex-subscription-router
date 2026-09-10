@@ -60,13 +60,18 @@ needs `--allow-untested-source` and prints the untested-build warning.
 - **The multiplexer.** `cmd/codex-mux` and `internal/*` are one code base.
   Routing, sticky ownership, failover, the control API on `127.0.0.1:48123`,
   the state layout under `~/.codex-mux`, and the account homes are identical.
-  Only child termination, the shutdown signals, and the name of the parked
-  real binary have per-platform files.
-- **Tooling.** `@electron/asar` 4.3.0 is run through `node` and its ESM entry
-  point `node_modules/@electron/asar/bin/asar.mjs` on every OS, never the
-  `.cmd` shim, after `ensure_asar_tool` has checked the installed version
-  against `package.json`. `asar_header_digest` records the header digest
-  Electron validates, as on macOS since build 8109.
+  Only child termination has per-platform files
+  (`internal/backend/child_terminate_{unix,windows}.go`); the shutdown signal
+  list is shared, and the parked real binary's name is a `GOOS` branch in the
+  single `cmd/codex-mux/real_executable.go`.
+- **Tooling.** `ensure_asar_tool` is shared: it checks that the installed
+  `@electron/asar` matches the `4.3.0` pin in `package.json` and that `node` is
+  new enough for it. How the CLI is then invoked differs: the Windows patcher
+  runs `node node_modules/@electron/asar/bin/asar.mjs` directly, never the
+  `.cmd` shim, while the macOS patcher keeps executing `node_modules/.bin/asar`
+  exactly as before (on POSIX a symlink to that same `asar.mjs`).
+  `asar_header_digest` records the header digest Electron validates, as on
+  macOS since build 8109.
 - **Token and backups.** `load_or_create_token` and the timestamped
   `~/.codex-mux/backups/<timestamp>/` move with rollback are shared.
 
@@ -81,13 +86,14 @@ needs `--allow-untested-source` and prints the untested-build warning.
 | Signing | `codesign` under one Apple team, team continuity enforced | none; the copy runs unsigned and SmartScreen may warn |
 | Computer Use | helper re-identified, re-signed, managed service pinned | not patched; `SKY_CUA_SERVICE_NATIVE_PIPE_PATH` set to `\\.\pipe\codex-subscription-router-computer-use`, a name the official app never uses, and `CODEX_ELECTRON_SKIP_COMPUTER_USE_CANONICAL_REFRESH=1` |
 | Desktop profile | `~/Library/Application Support/Codex Subscription Router` | `%APPDATA%\Codex Subscription Router` |
-| State permissions | `0700` root, `0600` files | `icacls` at install time: inheritance removed, current user and SYSTEM only, inherited by later files; the mux's POSIX modes are no-ops beyond the read-only bit |
+| State permissions | `0700` root, `0600` files | `icacls` at install time: inheritance removed, current user and SYSTEM only, inherited by files and directories created under the root later (a previous install moved into `backups\` keeps its own ACL); the mux's POSIX modes are no-ops beyond the read-only bit |
 | URL scheme | `CFBundleURLSchemes` edited in `Info.plist` | the literal `'codex'` in `setAsDefaultProtocolClient`, `removeAsDefaultProtocolClient`, and `isDefaultProtocolClient` calls in `.vite/build/*.js` becomes `'codex-subscription-router'`; zero matches is a warning, not an error, because the layout is unverified |
 | Child shutdown | `SIGINT` to each child | close the child's stdin (the app-server exits on EOF), wait up to 2 s, then `Kill`; `os.Process.Signal(os.Interrupt)` is unsupported on Windows |
 | Mux shutdown signals | `SIGINT`, `SIGTERM` | the same list. Go's runtime delivers Ctrl-C and Ctrl-Break as `os.Interrupt` and CTRL_CLOSE, CTRL_LOGOFF and CTRL_SHUTDOWN console events as `SIGTERM`, so listing both keeps the deferred `multiplexer.Close()` running on logoff and shutdown; when the desktop app exits it closes stdin, which ends the mux on its own |
 | Unpacked native modules | hard-coded `ASAR_UNPACK_DIRECTORIES` | derived from the official `resources\app.asar.unpacked\node_modules`; every path the official archive kept unpacked must still be unpacked after repacking |
 | Source discovery | `/Applications/ChatGPT.app` | candidate list below; exactly one qualifying install; Microsoft Store/MSIX refused |
 | Version identity | `CFBundleShortVersionString` and build from `Info.plist` | `ProductVersion` and `FileVersion` from `RT_VERSION` via `scripts/win/exe-info.mjs` |
+| Asar CLI invocation | `node_modules/.bin/asar` (POSIX symlink to `asar.mjs`) | `node node_modules\@electron\asar\bin\asar.mjs`; the `.cmd` shim is never used |
 | Path length | not a concern | projected longest path checked against `MAX_PATH` (260); `LongPathsEnabled=1` required beyond it |
 | Installer | `install.sh` | `install.ps1` |
 | Shortcut | Launch Services registration | Start menu `.lnk` via `WScript.Shell`; failure is a warning |
@@ -215,9 +221,10 @@ Official app layout:
   `@electron/packager` writes it. Checked. Whether the embedded-asar-integrity
   fuse is enabled cannot be read by the tools; an enabled fuse with no
   resource would already prevent the official app from starting.
-- The official executable's `RT_VERSION` has a string table (assumed
-  language 1033) carrying `ProductVersion`, `FileVersion`, and `ProductName`.
-  Missing values print as `unknown` and can never match the tested table.
+- The official executable's `RT_VERSION` has a string table (the first one
+  present, whatever its language) carrying `ProductVersion`, `FileVersion`,
+  and `ProductName`. Missing values print as `unknown` and can never match the
+  tested table.
 - The Windows build honours `SKY_CUA_SERVICE_NATIVE_PIPE_PATH` and
   `CODEX_ELECTRON_SKIP_COMPUTER_USE_CANONICAL_REFRESH`; if it ignores them the
   prelude is harmless.
@@ -231,7 +238,10 @@ Run-time behaviour:
   macOS one does; hence the 2 s grace and kill backstop.
 - `pe-library` can parse the real executable. It refuses PEs with a COFF
   symbol table and unusual resource layouts, and holds roughly three copies of
-  the file in memory.
+  the file in memory per parse. `set-asar-integrity` parses the file three
+  times (input, temp file, final file), so budget about six times the
+  executable's size for it (measured on a 144 MB cross-compiled fixture:
+  `exe-info` 3.4×, `set-asar-integrity` 6.4×).
 - `fs.renameSync` over the existing `.exe` succeeds (`MoveFileEx` with
   replace); it fails, leaving the target untouched, if the file is locked.
 - Electron compares the stored `file` key against the archive path relative
@@ -242,9 +252,10 @@ Run-time behaviour:
   the launcher) resolve to the same directory.
 - Chromium treats a later `--user-data-dir` in passthrough arguments as
   overriding the launcher's; the launcher passes arguments verbatim.
-- Windows delivers console control events to the mux as `os.Interrupt`. When
-  Electron spawns `codex.exe` without a console, no signal ever arrives and
-  shutdown relies on the desktop app closing stdin.
+- Go delivers Ctrl-C and Ctrl-Break to the mux as `os.Interrupt` and the
+  CTRL_CLOSE, CTRL_LOGOFF and CTRL_SHUTDOWN console events as `SIGTERM`. When
+  Electron spawns `codex.exe` without a console, no console event ever arrives
+  and shutdown relies on the desktop app closing stdin.
 - Neither the console-subsystem mux nor `codex.real.exe` flashes a console
   window; this depends on Electron's spawn flags and on the mux's child
   spawn, which sets no Windows-specific `SysProcAttr`.
@@ -278,10 +289,12 @@ Installer and tooling:
   placeholder exits non-zero so the fallback to `py -3` engages.
 - `Stop-Process -Force` releases file locks within the ten-second window so
   `--force` can move the old copy.
-- The `windows` CI job relies on `windows-latest` providing `python3` on
-  `PATH` without `actions/setup-python` (this repository pins no such action),
-  on Git Bash as `shell: bash`, and on the Python unit tests written on Linux
-  passing under Windows path semantics.
+- The `windows` CI job relies on `windows-latest` providing `python` on `PATH`
+  without `actions/setup-python` (this repository pins no such action); the
+  image does not reliably expose `python3`, so the job invokes `python`
+  directly instead of the npm `check:python` and `release:check` scripts. It
+  also relies on Git Bash as `shell: bash`, and on the Python unit tests
+  written on Linux passing under Windows path semantics.
 - `asar list --is-pack` prints backslash paths on Windows (normalised) and
   `--unpack-dir` brace patterns match Windows relative paths. Checked by the
   unpacked-preserved comparison.

@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -133,6 +136,40 @@ func TestFindRealExecutable(t *testing.T) {
 				t.Fatalf("findRealExecutable=%q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// TestFindRealExecutableKeepsHistoricalMacOSError pins the exact failure text
+// the single-candidate (macOS) lookup produced before Windows candidates were
+// added, and that the stat error stays wrapped. The expected text is computed
+// from os.Stat rather than hard-coded so the same assertion holds on the
+// Windows CI job, where the OS error string differs.
+func TestFindRealExecutableKeepsHistoricalMacOSError(t *testing.T) {
+	directory := t.TempDir()
+	_, statErr := os.Stat(filepath.Join(directory, "codex.real"))
+	if statErr == nil {
+		t.Fatal("codex.real unexpectedly exists in an empty temporary directory")
+	}
+
+	_, err := findRealExecutable(directory, "darwin")
+	if err == nil {
+		t.Fatal("findRealExecutable unexpectedly succeeded")
+	}
+	if want := fmt.Sprintf("find bundled codex.real: %v", statErr); err.Error() != want {
+		t.Fatalf("error = %q, want %q", err, want)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("error %q does not wrap fs.ErrNotExist", err)
+	}
+
+	// The multi-candidate Windows message is different by design but must
+	// still wrap the underlying cause.
+	_, err = findRealExecutable(directory, "windows")
+	if err == nil {
+		t.Fatal("findRealExecutable unexpectedly succeeded for windows")
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("windows error %q does not wrap fs.ErrNotExist", err)
 	}
 }
 

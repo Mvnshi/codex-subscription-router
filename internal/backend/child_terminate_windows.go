@@ -29,10 +29,15 @@ func (c *Child) terminate() error {
 	if c.command.Process == nil {
 		return nil
 	}
-	// *os.File is safe for concurrent Write and Close, and exec wraps the
-	// stdin pipe in a close-once guard, so this neither races SendRaw nor
-	// conflicts with the close command.Wait performs later. A concurrent
-	// SendRaw simply fails, which is correct during shutdown.
+	// *os.File is safe for concurrent Write and Close (documented on os.File),
+	// so this does not race SendRaw: a Write that arrives after Close fails
+	// with ErrClosed, which is correct during shutdown, and a Write already
+	// blocked on a full pipe is cancelled (poll.FD.Close issues CancelIoEx for
+	// pipes) instead of stalling this function before the timer starts. exec's
+	// Wait closes the same *os.File again later; that second Close only
+	// returns ErrClosed, which Wait's closeDescriptors ignores. StdinPipe
+	// hands back the bare *os.File from os.Pipe, so there is no close-once
+	// wrapper to lean on: the double close is simply harmless.
 	_ = c.stdin.Close()
 
 	timer := time.NewTimer(terminateGrace)

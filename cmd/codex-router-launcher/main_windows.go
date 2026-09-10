@@ -44,13 +44,11 @@ func run() error {
 
 	appData := os.Getenv("APPDATA")
 	if appData == "" {
-		// os.UserConfigDir reads the same variable on Windows, so this only
-		// helps when the caller scrubbed APPDATA but Go can still find a
-		// roaming profile through it; either way the result is checked below.
-		appData, err = os.UserConfigDir()
-		if err != nil {
-			return fmt.Errorf("APPDATA is not set: %w", err)
-		}
+		// No fallback: os.UserConfigDir is the same %AppData% lookup on
+		// Windows, so there is nothing independent to try. Refusing to start
+		// mirrors launcher.c's HOME check and the patcher's APPDATA check;
+		// guessing a profile directory could land in the official app's.
+		return errors.New("APPDATA is not set")
 	}
 
 	executable, arguments, err := launcherCommand(resolvedPath, appData, os.Args[1:])

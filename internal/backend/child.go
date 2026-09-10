@@ -136,11 +136,11 @@ func (c *Child) Request(ctx context.Context, method string, params json.RawMessa
 	}
 }
 
+// Close asks the real app-server to exit. The mechanism is platform specific
+// (see child_terminate_unix.go and child_terminate_windows.go) because Go
+// cannot deliver os.Interrupt to a Windows process.
 func (c *Child) Close() error {
-	if c.command.Process == nil {
-		return nil
-	}
-	return c.command.Process.Signal(os.Interrupt)
+	return c.terminate()
 }
 
 func (c *Child) readLoop(stdout io.Reader) {

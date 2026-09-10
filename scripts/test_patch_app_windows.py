@@ -863,8 +863,24 @@ class HelperDecodingTests(unittest.TestCase):
         with self.assertRaises(RuntimeError) as caught:
             win.run_helper(command, "probe", errors="replace")
         self.assertIn("probe failed (exit 1): Acc�s refus�", str(caught.exception))
-        with self.assertRaises(UnicodeDecodeError):
+        # The strict default is still an error, but a RuntimeError main() can
+        # report, whichever way subprocess surfaces the decode failure: POSIX
+        # raises UnicodeDecodeError from run(), Windows returns None streams.
+        with self.assertRaises(RuntimeError) as caught:
             win.run_helper(command, "probe")
+        self.assertIn("probe wrote output that is not UTF-8", str(caught.exception))
+
+    def test_none_streams_from_a_dead_reader_thread_are_an_error(self):
+        # Windows: communicate() decodes in reader threads, and a strict decode
+        # failure kills the thread and leaves that stream None (seen in CI as
+        # AttributeError: 'NoneType' object has no attribute 'strip').
+        for stdout, stderr in ((None, ""), ("", None), (None, None)):
+            completed = subprocess.CompletedProcess([], 0, stdout=stdout, stderr=stderr)
+            with self.subTest(stdout=stdout, stderr=stderr), \
+                 mock.patch.object(win.subprocess, "run", return_value=completed), \
+                 self.assertRaises(RuntimeError) as caught:
+                win.run_helper(["probe"], "probe")
+            self.assertIn("probe wrote output that is not UTF-8", str(caught.exception))
 
 
 class NotSameDevice(OSError):

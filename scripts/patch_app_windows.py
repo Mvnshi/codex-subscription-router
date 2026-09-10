@@ -627,16 +627,29 @@ def run_helper(
     pipe whatever the console code page is. errors is the codec error handler:
     "strict" by default, so a helper whose JSON is not UTF-8 is an error rather
     than silently mangled input; a caller whose child does not write UTF-8
-    passes "replace" and says why at the call site.
+    passes "replace" and says why at the call site. A strict-decode failure is
+    reported as a RuntimeError on every platform, because subprocess surfaces
+    it differently: POSIX raises UnicodeDecodeError from run(), Windows returns
+    None for the stream whose reader thread died.
     """
-    result = subprocess.run(
-        command,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors=errors,
-    )
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors=errors,
+        )
+    except UnicodeDecodeError as error:
+        # POSIX: communicate() decodes after reading and raises here.
+        raise RuntimeError(f"{tool} wrote output that is not UTF-8: {error}") from error
+    if result.stdout is None or result.stderr is None:
+        # Windows: communicate() decodes in reader threads; a decode failure
+        # kills the thread and the stream comes back as None instead of an
+        # exception. Surface the same clear error rather than an AttributeError
+        # or a json.loads(None) traceback further down.
+        raise RuntimeError(f"{tool} wrote output that is not UTF-8")
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "no output"
         raise RuntimeError(f"{tool} failed (exit {result.returncode}): {detail}")

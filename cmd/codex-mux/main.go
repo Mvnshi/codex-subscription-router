@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/b-nnett/codex-subscription-router/internal/control"
@@ -60,7 +61,10 @@ func run() error {
 		return err
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), shutdownSignals()...)
+	// syscall.SIGTERM is meaningful on Windows too: Go delivers CTRL_CLOSE,
+	// CTRL_LOGOFF and CTRL_SHUTDOWN console events as SIGTERM (Ctrl-C and
+	// Ctrl-Break arrive as os.Interrupt), so this list is the same everywhere.
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	multiplexer, err := mux.New(mux.Options{
 		RealExecutable: realExecutable,

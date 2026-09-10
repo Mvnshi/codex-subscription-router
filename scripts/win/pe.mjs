@@ -52,7 +52,15 @@ const MACHINE_NAMES = new Map([
 
 const SHA256_HEX = /^[0-9a-fA-F]{64}$/;
 
-/** Copy a Node Buffer into a standalone ArrayBuffer (pe-library's input type). */
+/**
+ * Copy a Node Buffer into a standalone, exact-size ArrayBuffer. Needed for
+ * ResourceEntry.bin, which pe-library declares as a plain ArrayBuffer and
+ * resedit's resource parsers wrap with `new DataView(entry.bin)` (a TypeError
+ * on a Uint8Array view). NOT needed for parsing a whole file: NtExecutable
+ * .from accepts any ArrayBufferView, so parseExecutable passes a Buffer that
+ * owns its storage as is rather than holding a second copy of a 150 MB
+ * executable, and copies only the pooled sub-4 KB case (see there for why).
+ */
 export function toArrayBuffer(buffer) {
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 }
@@ -95,9 +103,18 @@ export function parseExecutable(buffer, label) {
   if (buffer.byteLength < 2 || buffer[0] !== 0x4d || buffer[1] !== 0x5a) {
     throw new UsageError(`${label} is not a PE executable (no MZ header)`);
   }
+  // pe-library accepts a Buffer and honours its byteOffset, but bounds its
+  // DataViews and copies against the underlying ArrayBuffer, not the view.
+  // fs.readFileSync returns files under 4 KB as a slice of Node's shared
+  // Buffer pool, so passing such a view straight through would let a
+  // truncated header read neighbouring pool bytes as if they were file
+  // content. No real executable is that small, but fail closed: a pooled
+  // view gets exact-size storage (a copy of at most 4 KB); anything larger
+  // owns its ArrayBuffer and is parsed in place, with no whole-file copy.
+  const ownsStorage = buffer.byteOffset === 0 && buffer.byteLength === buffer.buffer.byteLength;
   let exe;
   try {
-    exe = NtExecutable.from(toArrayBuffer(buffer), { ignoreCert: true });
+    exe = NtExecutable.from(ownsStorage ? buffer : toArrayBuffer(buffer), { ignoreCert: true });
   } catch (error) {
     throw new UsageError(`${label} is not a supported PE executable: ${error.message}`);
   }

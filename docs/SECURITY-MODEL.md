@@ -77,18 +77,26 @@ build.
   `signed: false` and the recorded integrity value, nothing more.
 - **State root ACL.** The patcher creates `%USERPROFILE%\.codex-mux` and
   writes `control-token` into it (`load_or_create_token`, shared with macOS),
-  then immediately, before anything else is installed, runs
+  then immediately, before anything else is installed, runs two `icacls`
+  commands in order. `icacls %USERPROFILE%\.codex-mux /reset` first discards
+  every explicit ACE on the root, including one another principal already
+  held on a pre-existing root (granted by hand or by a sync tool), which
+  `/inheritance:r` and `/grant:r` alone would leave in place. Then
   `icacls %USERPROFILE%\.codex-mux /inheritance:r /grant:r <DOMAIN\user>:(OI)(CI)F *S-1-5-18:(OI)(CI)F`:
   inheritance is removed and only the current user and SYSTEM keep access.
   `icacls` recomputes the inherited ACEs of the token already inside, and
   `(OI)(CI)` makes files and directories created later under the root (state,
   account homes, the `backups\<timestamp>\` directory) inherit that ACL.
-  Until `icacls` has run, the token carries the ACL inherited from
+  Explicit ACEs on files and directories already inside the root are not
+  reset (there is no `/T`; a recursive reset would rewrite every account
+  home). Until `icacls` has run, the token carries the ACL inherited from
   `%USERPROFILE%` (by default the current user, Administrators, and SYSTEM).
-  A previous install is moved into the backup directory with a same-volume
-  rename, so that tree keeps the ACL it had under `%LOCALAPPDATA%\Programs`
-  (the same three principals by default) rather than inheriting the root's.
-  The install stops if `icacls` fails.
+  A previous install is moved into the backup directory with a rename when
+  both are on the same volume, so that tree keeps the ACL it had under
+  `%LOCALAPPDATA%\Programs` (the same three principals by default) rather
+  than inheriting the root's; a backup that had to be copied to another
+  volume is written afresh and inherits the root's ACL. The install stops if
+  `icacls` fails.
 - **POSIX modes are no-ops.** The multiplexer's `0700`/`0600` modes and the
   control-token permission repair on startup only toggle the read-only
   attribute on Windows. Protection of the state root therefore comes from the
@@ -100,15 +108,23 @@ build.
   copy is installed per user under `%LOCALAPPDATA%\Programs`, so any process
   running as that user can modify it; the installer refuses to run elevated.
 - **Computer Use.** No Windows helper is patched or shipped. The copy's
-  `SKY_CUA_SERVICE_NATIVE_PIPE_PATH` is set to
-  `\\.\pipe\codex-subscription-router-computer-use`, a named pipe the
-  official app never uses, so the copy cannot attach to the official helper's
-  pipe by accident; nothing listens there.
+  `SKY_CUA_SERVICE_NATIVE_PIPE_PATH` is set to the prefix
+  `\\.\pipe\codex-subscription-router-computer-use-` plus a
+  `globalThis.crypto.randomUUID()` drawn on every launch, so the copy cannot
+  attach to the official helper's pipe by accident and nothing listens at the
+  name it uses. The name is not fixed because the Windows pipe namespace is
+  machine-global with no per-user scope: a fixed name could be pre-created by
+  any other local account and answered as a fake helper, whereas the macOS
+  socket gets that protection from the `0700` state root. Every child the
+  copy spawns inherits the per-launch value through the environment.
 - **Protocol handler.** The copy registers `codex-subscription-router://`
   instead of `codex://` (registry keys under `HKCU\Software\Classes`), so
-  deep links keep opening the official app. The patcher warns rather than
-  fails when it finds no registration call to retarget; the smoke test checks
-  the handler after launch.
+  deep links keep opening the official app. The patcher fails closed on a
+  `setAsDefaultProtocolClient` call whose scheme is not the literal `'codex'`
+  (a variable, another literal, `.call`/`.apply`, an alias): it stops before
+  the bundle is written, because the copy would otherwise register that scheme
+  for itself at first launch. Only the total absence of any such call warns;
+  the smoke test checks the handler after launch.
 - **Profile isolation.** The launcher passes
   `--user-data-dir=%APPDATA%\Codex Subscription Router` and the main process
   sets the same `userData`; Electron's single-instance lock is scoped to that

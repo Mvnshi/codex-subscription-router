@@ -39,9 +39,9 @@ is passed.
    pagination, failover and sticky-ownership tests before integration.
 4. The signed desktop smoke matrix should run before any release tag.
 5. Windows: exercise against an official build. The port is implemented and
-   unit-tested on Linux and in CI but has never been launched against an
-   official Windows build; record the first one as described in
-   [WINDOWS.md](WINDOWS.md).
+   unit-tested on Linux, and CI repeats the checks on macOS and Windows, but
+   it has never been launched against an official Windows build; record the
+   first one as described in [WINDOWS.md](WINDOWS.md).
 
 ## Install
 

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import errno
 import fnmatch
 import hashlib
 import json
@@ -82,6 +83,10 @@ MAX_PATH = 260
 # Slack for the renames the patcher performs on the copied tree
 # (codex.exe -> codex.real.exe adds five characters) and for the trailing NUL.
 PATH_LENGTH_MARGIN = 8
+# Win32 ERROR_NOT_SAME_DEVICE: what MoveFileEx reports for a rename across
+# volumes. Python maps it to errno.EXDEV as well; move_directory checks both
+# so the fallback does not hinge on that mapping.
+ERROR_NOT_SAME_DEVICE = 17
 # tempfile.mkdtemp appends eight random characters to the prefix.
 STAGING_PREFIX = ".codex-subscription-router-"
 STAGING_RANDOM_LENGTH = 8
@@ -606,7 +611,9 @@ def asar_output(command: list[str]) -> str:
     return subprocess.check_output(command, text=True, encoding="utf-8").strip()
 
 
-def run_helper(command: list[str], tool: str) -> subprocess.CompletedProcess:
+def run_helper(
+    command: list[str], tool: str, *, errors: str = "strict"
+) -> subprocess.CompletedProcess:
     """Run a helper and surface its own diagnostic when it fails.
 
     subprocess.run(check=True) raises CalledProcessError whose message carries
@@ -615,9 +622,20 @@ def run_helper(command: list[str], tool: str) -> subprocess.CompletedProcess:
     stderr, which capture_output would otherwise discard; docs/WINDOWS.md
     promises that a stopped run names the check that failed. Still fail
     closed: every non-zero exit raises.
+
+    Output is decoded as UTF-8, which is what the node helpers write to a
+    pipe whatever the console code page is. errors is the codec error handler:
+    "strict" by default, so a helper whose JSON is not UTF-8 is an error rather
+    than silently mangled input; a caller whose child does not write UTF-8
+    passes "replace" and says why at the call site.
     """
     result = subprocess.run(
-        command, check=False, capture_output=True, text=True, encoding="utf-8"
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors=errors,
     )
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "no output"
@@ -744,9 +762,17 @@ def harden_state_root(state_root: Path) -> None:
 
 
 def ensure_destination_processes_stopped(destination: Path) -> None:
+    # errors="replace": Windows PowerShell 5.1 writes redirected output in the
+    # console's OEM code page (cp850, cp437, ...), not UTF-8, so a localized
+    # failure text ("Accès refusé") is not valid UTF-8 and a strict decode
+    # would raise UnicodeDecodeError, a ValueError that main() does not turn
+    # into its "patch failed: ..." line. The PIDs on stdout are ASCII in every
+    # code page, so replacement can only touch the diagnostic, which still
+    # names the failed check legibly.
     result = run_helper(
         powershell_stopped_processes_command(destination),
         "process check (Get-CimInstance)",
+        errors="replace",
     )
     pids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     if pids:
@@ -816,6 +842,68 @@ def rewrite_asar_integrity(executable: Path, entry: dict, digest: str) -> str:
     return str(updated["value"])
 
 
+def move_directory(source: Path, target: Path) -> None:
+    """Move a directory tree, atomically when the volume allows it.
+
+    Path.rename is one MoveFileEx call and atomic within a volume, so it is
+    tried first. The backup lives under the state root
+    (%USERPROFILE%\\.codex-mux) while the destination defaults to
+    %LOCALAPPDATA%\\Programs, and either can sit on another volume (a
+    --destination on D:, a relocated profile or LOCALAPPDATA), where the
+    rename fails with ERROR_NOT_SAME_DEVICE (errno EXDEV). Only that failure
+    falls back to shutil.move, which copies the tree and then removes the
+    original: not atomic, but it never leaves the tree missing at both paths.
+    Every other OSError propagates unchanged: shutil.move on its own would
+    also copy over a transient lock or a permission problem and could then
+    fail half-way through removing the original, leaving two partial trees.
+    """
+    try:
+        source.rename(target)
+    except OSError as error:
+        if (
+            error.errno != errno.EXDEV
+            and getattr(error, "winerror", None) != ERROR_NOT_SAME_DEVICE
+        ):
+            raise
+        shutil.move(source, target)
+
+
+def swap_into_place(
+    stage: Path, destination: Path, backup_directory: Path, had_app: bool
+) -> None:
+    """Move an existing install to its backup, then rename the staged copy in.
+
+    The macOS flow renames the app and then its Computer Use helper, so its
+    handler has to park a half-installed new copy under failed-install before
+    restoring. The Windows flow performs exactly one atomic rename after the
+    backup move, so when something raises either the backup move itself
+    failed and the previous install is still untouched at the destination
+    (Defender scanning the just-closed app can hold a transient lock), or the
+    backup move succeeded and the single stage rename failed, leaving nothing
+    at the destination. There is never a half-installed new copy to park, so
+    the handler is a pure restore of the backup and the staged copy is
+    discarded with the temporary directory. The failed-install move once
+    copied from macOS misfired here: with destination.exists() true after a
+    failed backup move it moved the user's working install into
+    failed-install and restored nothing.
+    """
+    app_backup = backup_directory / destination.name
+    try:
+        if had_app:
+            move_directory(destination, app_backup)
+            print(f"Existing copy moved to {app_backup}")
+        # The stage is in destination.parent, hence on the destination's
+        # volume; a plain rename is atomic there and deliberately has no copy
+        # fallback, which would be exactly the half-installed copy avoided.
+        stage.rename(destination)
+    except OSError:
+        if had_app and not destination.exists() and app_backup.exists():
+            # move_directory, not rename: a backup that went to another volume
+            # has to come back the same way.
+            move_directory(app_backup, destination)
+        raise
+
+
 def patch_app(
     source: Path | None,
     destination: Path | None,
@@ -845,8 +933,18 @@ def patch_app(
     electron_exe = select_electron_executable(source, electron_executable)
     print(f"Source install: {source}")
     print(f"Electron executable: {electron_exe.name}")
+    # Everything that depends only on the source is checked here, before the
+    # tool probes, the copy of a several-hundred-MB tree and the two Go
+    # builds, so a layout this patcher does not understand stops the run in
+    # seconds. The stage is a verbatim copy, so these results hold there too.
+    ldflags = launcher_ldflags(electron_exe.name)
+    globs = unpack_globs(source)
+    source_codex = locate_codex_executable(source, codex_executable)
+    if source_codex.with_name(REAL_CODEX_EXECUTABLE_NAME).exists():
+        raise RuntimeError(f"source app already contains {REAL_CODEX_EXECUTABLE_NAME}")
     for tool in ("go", "node", "npm"):
         shared.require_tool(tool)
+    asar = asar_command()
     info = exe_info(electron_exe)
     source_asar = source / "resources" / "app.asar"
     source_asar_hash = hashlib.sha256(source_asar.read_bytes()).hexdigest()
@@ -858,7 +956,6 @@ def patch_app(
     )
     approve_source(identity, allow_untested_source)
 
-    asar = asar_command()
     token = shared.load_or_create_token()
     harden_state_root(shared.DEFAULT_STATE_ROOT)
     if destination.exists() and not force:
@@ -888,7 +985,7 @@ def patch_app(
             stage / LAUNCHER_EXECUTABLE_NAME,
             "./cmd/codex-router-launcher",
             goos="windows",
-            ldflags=launcher_ldflags(electron_exe.name),
+            ldflags=ldflags,
         )
 
         resources = stage / "resources"
@@ -914,7 +1011,6 @@ def patch_app(
         shared.patch_renderer(extracted, token)
 
         repacked_asar = temporary_path / "app.asar"
-        globs = unpack_globs(stage)
         pack_command = [*asar, "pack"]
         if globs is not None:
             pack_command.extend(("--unpack-dir", globs))
@@ -933,8 +1029,10 @@ def patch_app(
                 repacked_unpacked, resources / "app.asar.unpacked", dirs_exist_ok=True
             )
 
-        real_codex = locate_codex_executable(stage, codex_executable)
+        real_codex = stage / source_codex.relative_to(source)
         parked_codex = real_codex.with_name(REAL_CODEX_EXECUTABLE_NAME)
+        # Already refused on the source; repeated on the stage as belt and
+        # braces since the rename below would otherwise overwrite it.
         if parked_codex.exists():
             raise RuntimeError(f"source app already contains {REAL_CODEX_EXECUTABLE_NAME}")
         real_codex.rename(parked_codex)
@@ -963,25 +1061,12 @@ def patch_app(
 
         backup_suffix = time.strftime("%Y%m%d-%H%M%S")
         backup_directory = shared.DEFAULT_STATE_ROOT / "backups" / backup_suffix
-        app_backup = backup_directory / destination.name
         had_app = destination.exists()
         if had_app:
             backup_directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             backup_directory.parent.chmod(0o700)
             backup_directory.mkdir(mode=0o700, parents=True, exist_ok=False)
-        try:
-            if had_app:
-                destination.rename(app_backup)
-                print(f"Existing copy moved to {app_backup}")
-            stage.rename(destination)
-        except OSError:
-            failed_directory = backup_directory / "failed-install"
-            failed_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-            if destination.exists():
-                destination.rename(failed_directory / destination.name)
-            if app_backup.exists():
-                app_backup.rename(destination)
-            raise
+        swap_into_place(stage, destination, backup_directory, had_app)
 
     launcher = destination / LAUNCHER_EXECUTABLE_NAME
     if create_shortcut:

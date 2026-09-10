@@ -47,9 +47,12 @@ this project uses [Semantic Versioning](https://semver.org/).
   itself with an unpatched official build.
 - `@electron/asar` 4.2.1 → 4.3.0, `actions/checkout` 6.1.0 → 7.0.1, and
   `actions/setup-node` 6.5.0 → 7.0.0.
-- The release check now requires every npm dev dependency to be exact and
-  lock-matched, checks `install.sh`'s executable bit through git's index mode,
-  and rejects tracked `.exe`, `.lnk`, `.msi`, and `.msix` files.
+- The release check now requires every npm dev dependency (from `package.json`
+  or the lock file's root entry) to be exact and lock-matched, requires
+  `@electron/asar` and `resedit` to be declared, rejects runtime
+  `dependencies` in `package.json`, checks `install.sh`'s executable bit
+  through git's index mode, and rejects tracked `.exe`, `.lnk`, `.msi`, and
+  `.msix` files.
 - CI runs a `macos` job (the former `checks` job, renamed; a required
   status check named `checks` must be updated to `macos`) and a `windows`
   job; the macOS job also cross-compiles the Go packages for Windows.

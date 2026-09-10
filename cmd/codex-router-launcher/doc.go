@@ -6,9 +6,12 @@
 // at build time). When run it starts that executable from the same directory
 // with "--user-data-dir=%APPDATA%\Codex Subscription Router" as the first
 // argument, followed by every argument it received, inheriting environment and
-// standard handles, and exits with the child's exit code. APPDATA must be set
-// in the environment; without it the launcher refuses to start, as launcher.c
-// does without HOME.
+// standard handles, and exits with the child's exit code. Unlike launcher.c's
+// execv, which preserves the caller's working directory, the launcher starts
+// the app with its own directory as the working directory, so relative-path
+// arguments typed at a console resolve there. APPDATA must be set in the
+// environment; without it the launcher refuses to start, as launcher.c does
+// without HOME.
 //
 // Why a launcher instead of a shortcut carrying the flag: Chromium reads
 // --user-data-dir before Electron's JavaScript runs, so it has to arrive on

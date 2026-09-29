@@ -6,6 +6,9 @@ function CodexMuxThreadSubscription() {
   const threadId =
     route.value.routeKind === "local-thread" ? route.value.conversationId : null;
   const [account, setAccount] = TE.useState(null);
+  const [choices, setChoices] = TE.useState([]);
+  const [moving, setMoving] = TE.useState(false);
+  const [moveError, setMoveError] = TE.useState("");
 
   TE.useEffect(() => {
     let active = true;
@@ -28,6 +31,26 @@ function CodexMuxThreadSubscription() {
       } catch {
         if (active) setAccount(null);
       }
+      try {
+        const response = await fetch(`${CODEX_MUX_THREAD_API}/accounts`, {
+          headers: { "X-Codex-Mux-Token": CODEX_MUX_THREAD_TOKEN },
+        });
+        if (!response.ok) throw new Error(`Request failed (${response.status})`);
+        const body = await response.json();
+        if (active) {
+          setChoices(
+            (body.accounts || []).filter(
+              (entry) =>
+                entry.enabled &&
+                entry.connected &&
+                !entry.needsReauth &&
+                (!entry.authType || entry.authType === "chatgpt"),
+            ),
+          );
+        }
+      } catch {
+        if (active) setChoices([]);
+      }
     };
 
     refresh();
@@ -39,7 +62,9 @@ function CodexMuxThreadSubscription() {
         const payload = JSON.parse(event.data);
         if (
           payload.type === "account-updated" ||
-          (payload.type === "thread-failed-over" &&
+          payload.type === "account-removed" ||
+          ((payload.type === "thread-failed-over" ||
+            payload.type === "thread-moved") &&
             payload.data?.threadId === threadId)
         ) {
           refresh();
@@ -56,15 +81,90 @@ function CodexMuxThreadSubscription() {
     };
   }, [threadId]);
 
+  TE.useEffect(() => {
+    setMoveError("");
+  }, [threadId]);
+
+  async function moveThread(accountId) {
+    if (!threadId || !accountId || accountId === account?.id || moving) return;
+    setMoving(true);
+    setMoveError("");
+    try {
+      const response = await fetch(`${CODEX_MUX_THREAD_API}/thread-account`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Codex-Mux-Token": CODEX_MUX_THREAD_TOKEN,
+        },
+        body: JSON.stringify({ threadId, accountId }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`);
+      setAccount(body.account || null);
+    } catch (requestError) {
+      setMoveError(requestError.message);
+    } finally {
+      setMoving(false);
+    }
+  }
+
   if (!account) return null;
   const weekly = codexMuxThreadWeeklyWindow(account.rateLimits);
   const remaining = weekly == null ? null : Math.max(0, 100 - weekly.usedPercent);
   const depleted = remaining === 0;
   const AccountAvatar = globalThis.CodexMuxAccountAvatar;
+  const otherChoices = choices.filter((entry) => entry.id !== account.id);
   return (0, zE.jsx)(K.Section, {
     sectionKey: "codex-mux-subscription",
     title: "Subscription",
     children: (0, zE.jsxs)("div", {
+      className: "flex flex-col",
+      children: [
+        codexMuxThreadAccountRow(account, AccountAvatar, remaining, depleted),
+        otherChoices.length > 0
+          ? (0, zE.jsxs)("label", {
+              className: "flex items-center justify-between gap-3 pb-1 text-xs text-token-text-secondary",
+              children: [
+                (0, zE.jsx)("span", {
+                  children: moving ? "Moving chat…" : "Continue this chat on",
+                }),
+                (0, zE.jsxs)("select", {
+                  className:
+                    "max-w-48 truncate rounded-md border border-token-border bg-transparent px-1.5 py-0.5 text-xs text-token-text-primary",
+                  value: "",
+                  disabled: moving,
+                  "aria-label": "Move this chat to another subscription",
+                  onChange: (event) => moveThread(event.target.value),
+                  children: [
+                    (0, zE.jsx)("option", { value: "", children: "Choose subscription…" }, ""),
+                    ...otherChoices.map((entry) => {
+                      const limit = codexMuxThreadWeeklyWindow(entry.rateLimits);
+                      const left = limit == null ? null : Math.max(0, Math.round(100 - limit.usedPercent));
+                      const title = entry.planLabel ? `${entry.label} · ${entry.planLabel}` : entry.label;
+                      return (0, zE.jsx)(
+                        "option",
+                        { value: entry.id, children: left == null ? title : `${title} (${left}% left)` },
+                        entry.id,
+                      );
+                    }),
+                  ],
+                }),
+              ],
+            })
+          : null,
+        moveError
+          ? (0, zE.jsx)("div", {
+              className: "pb-1 text-xs text-token-text-error",
+              children: moveError,
+            })
+          : null,
+      ],
+    }),
+  });
+}
+
+function codexMuxThreadAccountRow(account, AccountAvatar, remaining, depleted) {
+  return (0, zE.jsxs)("div", {
       className: "flex min-h-9 items-center justify-between gap-3 py-1 text-sm",
       children: [
         (0, zE.jsxs)("div", {
@@ -82,20 +182,21 @@ function CodexMuxThreadSubscription() {
               children: account.planLabel
                 ? `${account.label} · ${account.planLabel}`
                 : account.label,
+              title: "Follow-up messages in this chat use this subscription",
             }),
           ],
         }),
         (0, zE.jsx)("span", {
           className: "shrink-0 tabular-nums text-token-description-foreground",
-          children:
-            remaining == null
+          children: account.needsReauth
+            ? "Sign-in expired"
+            : remaining == null
               ? "Usage unavailable"
               : depleted
                 ? "Depleted"
                 : `${Math.round(remaining)}% remaining`,
         }),
       ],
-    }),
   });
 }
 

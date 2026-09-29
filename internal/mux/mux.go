@@ -93,6 +93,9 @@ type Multiplexer struct {
 
 	resetPreviewMu sync.RWMutex
 	resetPreviews  map[string]ResetCreditsPreview
+
+	tokenRefreshMu sync.Mutex
+	tokenRefreshAt map[string]time.Time
 }
 
 func New(options Options) (*Multiplexer, error) {
@@ -119,6 +122,7 @@ func New(options Options) (*Multiplexer, error) {
 		resetCreditsCache:    make(map[string]resetCreditsCacheEntry),
 		resetCreditsEndpoint: rateLimitResetCreditsURL,
 		resetPreviews:        make(map[string]ResetCreditsPreview),
+		tokenRefreshAt:       make(map[string]time.Time),
 	}, nil
 }
 
@@ -719,11 +723,12 @@ func threadIDFromNotification(params json.RawMessage) string {
 }
 
 func accountHasCapacity(snapshot AccountSnapshot) bool {
-	if !snapshot.Enabled || !snapshot.Connected || snapshot.AuthType != "chatgpt" {
+	if !snapshot.Enabled || !snapshot.Connected || snapshot.AuthType != "chatgpt" || snapshot.NeedsReauth {
 		return false
 	}
-	weekly, _ := longestAndShortestWindow(snapshot.RateLimits)
-	return weekly == nil || weekly.UsedPercent < 100
+	// Either window stops a request, so a spent five-hour window moves the
+	// turn now instead of letting it fail on the owner first.
+	return hasRoutableCapacity(snapshot.RateLimits)
 }
 
 func isUsageLimitResponse(message protocol.Message) bool {
@@ -791,4 +796,49 @@ func numericField(value map[string]any, keys ...string) float64 {
 		}
 	}
 	return 0
+}
+
+// MoveThread continues an existing chat on another subscription. The chat's
+// history is resumed from its rollout by the target account, exactly as an
+// automatic failover would, and every later turn is sent there.
+func (m *Multiplexer) MoveThread(ctx context.Context, threadID, targetAccountID string) (AccountSnapshot, error) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return AccountSnapshot{}, errors.New("threadId is required")
+	}
+	ownerID, ok := m.store.ThreadOwner(threadID)
+	if !ok {
+		return AccountSnapshot{}, fmt.Errorf("thread %q has no subscription assignment", threadID)
+	}
+	if ownerID == targetAccountID {
+		return m.accountSnapshot(ctx, targetAccountID)
+	}
+	if m.hasInflightTurn(threadID) {
+		return AccountSnapshot{}, errors.New("wait for the current response to finish before switching subscriptions")
+	}
+	target, err := m.accountSnapshotWithProfile(ctx, targetAccountID, false)
+	if err != nil {
+		return AccountSnapshot{}, err
+	}
+	switch {
+	case !target.Enabled:
+		return AccountSnapshot{}, fmt.Errorf("%s is paused", target.Label)
+	case !target.Connected || target.AuthType != "chatgpt":
+		return AccountSnapshot{}, fmt.Errorf("%s is not signed in", target.Label)
+	case target.NeedsReauth:
+		return AccountSnapshot{}, fmt.Errorf("%s needs to sign in again", target.Label)
+	}
+	if err := m.resumeThreadOnAccount(ctx, threadID, ownerID, targetAccountID); err != nil {
+		return AccountSnapshot{}, err
+	}
+	if err := m.store.SetThreadOwner(threadID, targetAccountID); err != nil {
+		return AccountSnapshot{}, err
+	}
+	m.publish(Event{
+		Type:      "thread-moved",
+		AccountID: targetAccountID,
+		Message:   fmt.Sprintf("Chat moved to %s", target.Label),
+		Data:      map[string]any{"threadId": threadID, "previousAccountId": ownerID},
+	})
+	return m.accountSnapshot(ctx, targetAccountID)
 }

@@ -34,7 +34,9 @@ balancing.
 
 The Primary account uses `~/.codex`. Added accounts use
 `~/.codex-mux/accounts/<id>/codex-home`. Managed configuration is copied from
-the Primary account, excluding credential-store settings and project trust.
+the Primary account, excluding credential-store settings. Primary's trusted
+projects are shared with every account (an account keeps projects it trusted
+itself), because every subscription works on the same local folders.
 Each isolated account forces file-backed CLI and MCP OAuth credentials.
 
 ## Desktop integration

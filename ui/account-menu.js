@@ -48,6 +48,95 @@ async function codexMuxFetchAccounts() {
   return accounts;
 }
 
+// An account can take chats only when it is enabled, signed in, and its saved
+// sign-in is still accepted by ChatGPT.
+function codexMuxIsUsable(account) {
+  return Boolean(
+    account &&
+      account.enabled &&
+      account.connected &&
+      !account.needsReauth &&
+      (!account.authType || account.authType === "chatgpt"),
+  );
+}
+
+function codexMuxAccountTitle(account) {
+  return account.planLabel ? `${account.label} · ${account.planLabel}` : account.label;
+}
+
+function codexMuxCreditsText(credits) {
+  if (credits == null || typeof credits !== "object") return null;
+  if (credits.unlimited) return "Unlimited credits";
+  const balance = Number.parseFloat(credits.balance ?? "");
+  if (!credits.hasCredits && !(balance > 0)) return null;
+  if (!Number.isFinite(balance)) return "Credits available";
+  const rounded = Math.round(balance * 100) / 100;
+  return `${rounded.toLocaleString()} ${rounded === 1 ? "credit" : "credits"}`;
+}
+
+function codexMuxWindowName(window) {
+  const minutes = window?.windowDurationMins || 0;
+  if (minutes >= 10080) return "Weekly";
+  if (minutes >= 1440) return `${Math.round(minutes / 1440)}-day`;
+  if (minutes >= 60) return `${Math.round(minutes / 60)}-hour`;
+  return minutes > 0 ? `${minutes}-min` : "Usage";
+}
+
+function codexMuxResetText(resetsAt, now = Date.now()) {
+  if (resetsAt == null) return null;
+  const date = new Date(resetsAt * 1000);
+  if (Number.isNaN(date.getTime())) return null;
+  const sameDay = new Date(now).toDateString() === date.toDateString();
+  const time = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (sameDay) return `resets ${time}`;
+  const day = date.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  return `resets ${day}, ${time}`;
+}
+
+// One line per limit window, e.g. "5-hour: 40% left, resets 3:04 PM".
+function codexMuxUsageDetails(account, now = Date.now()) {
+  if (account?.needsReauth) return "ChatGPT rejected this sign-in. Sign in again to use it.";
+  const windows = [account?.rateLimits?.primary, account?.rateLimits?.secondary]
+    .filter(Boolean)
+    .sort((left, right) => (left.windowDurationMins || 0) - (right.windowDurationMins || 0));
+  const lines = windows.map((window) => {
+    const left = Math.max(0, Math.round(100 - window.usedPercent));
+    const reset = codexMuxResetText(window.resetsAt, now);
+    return `${codexMuxWindowName(window)}: ${left}% left${reset ? `, ${reset}` : ""}`;
+  });
+  const credits = codexMuxCreditsText(account?.credits);
+  if (credits) lines.push(credits);
+  if (lines.length === 0) return "Usage unavailable";
+  return lines.join(" · ");
+}
+
+async function codexMuxSetPreferredAccount(accountId) {
+  return codexMuxRequest("/routing", {
+    method: "PUT",
+    body: JSON.stringify({ preferredAccountId: accountId || null }),
+  });
+}
+
+async function codexMuxUpdateAccount(accountId, changes) {
+  return codexMuxRequest(`/accounts/${encodeURIComponent(accountId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(changes),
+  });
+}
+
+async function codexMuxRefreshAccount(accountId) {
+  return codexMuxRequest(`/accounts/${encodeURIComponent(accountId)}/refresh`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+async function codexMuxRemoveAccount(accountId) {
+  return codexMuxRequest(`/accounts/${encodeURIComponent(accountId)}`, {
+    method: "DELETE",
+  });
+}
+
 const CODEX_MUX_ACCOUNT_SCOPED_PLUGIN_METHODS = new Set([
   "list-apps",
   "list-installed-apps",
@@ -98,12 +187,7 @@ async function codexMuxFilterUsageStatus(status) {
   } catch {
     return status;
   }
-  const pool = accounts.filter(
-    (account) =>
-      account.enabled &&
-      account.connected &&
-      (!account.authType || account.authType === "chatgpt"),
-  );
+  const pool = accounts.filter(codexMuxIsUsable);
   if (pool.length < 2) return status;
   const poolHasCapacity = pool.some((account) => {
     const binding = codexMuxBindingWindow(account.rateLimits);
@@ -201,9 +285,7 @@ function CodexMuxUsageModal({
 }
 
 function CodexMuxUseResetAccountState() {
-  const cachedAccounts = codexMuxCachedAccounts().filter(
-    (account) => account.connected && account.enabled,
-  );
+  const cachedAccounts = codexMuxCachedAccounts().filter(codexMuxIsUsable);
   const [accounts, setAccounts] = kXc.useState(cachedAccounts);
   const [selectedId, setSelectedId] = kXc.useState(
     () =>
@@ -217,9 +299,7 @@ function CodexMuxUseResetAccountState() {
   const [loading, setLoading] = kXc.useState(cachedAccounts.length === 0);
 
   const loadAccounts = kXc.useCallback(async () => {
-    const connected = (await codexMuxFetchAccounts()).filter(
-      (account) => account.connected && account.enabled,
-    );
+    const connected = (await codexMuxFetchAccounts()).filter(codexMuxIsUsable);
     setAccounts(connected);
     setSelectedId((current) => {
       const next = connected.some((account) => account.id === current)
@@ -281,6 +361,7 @@ function CodexMuxUseResetAccountState() {
         window.__codexMuxResetAccountId = accountId;
         setSelectedId(accountId);
       },
+      onChanged: () => loadAccounts().catch(() => {}),
     },
   );
 
@@ -289,10 +370,12 @@ function CodexMuxUseResetAccountState() {
 function CodexMuxResetAccountSelector({
   accounts,
   loading,
+  onChanged,
   onSelect,
   resetCounts,
   selectedId,
 }) {
+  const selected = accounts.find((account) => account.id === selectedId) || null;
   return (0, e7.jsxs)("div", {
     className: "pt-4",
     children: [
@@ -312,6 +395,13 @@ function CodexMuxResetAccountSelector({
           : accounts.map((account) => {
               const selected = account.id === selectedId;
               const count = resetCounts[account.id];
+              const credits = codexMuxCreditsText(account.credits);
+              const resetText =
+                count == null
+                  ? "Resets unavailable"
+                  : count === 1
+                    ? "1 reset available"
+                    : `${count} resets available`;
               return (0, e7.jsxs)(
                 "button",
                 {
@@ -324,6 +414,7 @@ function CodexMuxResetAccountSelector({
                       : "text-token-text-secondary",
                   ].join(" "),
                   "aria-pressed": selected,
+                  title: codexMuxUsageDetails(account),
                   onClick: () => onSelect(account.id),
                   children: [
                     (0, e7.jsx)(CodexMuxAccountAvatar, {
@@ -336,18 +427,13 @@ function CodexMuxResetAccountSelector({
                       children: [
                         (0, e7.jsx)("span", {
                           className: "max-w-40 truncate text-sm font-medium",
-                          children: account.planLabel
-                            ? `${account.label} · ${account.planLabel}`
-                            : account.label,
+                          children: account.preferred
+                            ? `${codexMuxAccountTitle(account)} · Pinned`
+                            : codexMuxAccountTitle(account),
                         }),
                         (0, e7.jsx)("span", {
                           className: "text-xs text-token-text-tertiary",
-                          children:
-                            count == null
-                              ? "Resets unavailable"
-                              : count === 1
-                                ? "1 reset available"
-                                : `${count} resets available`,
+                          children: credits ? `${resetText} · ${credits}` : resetText,
                         }),
                       ],
                     }),
@@ -357,6 +443,116 @@ function CodexMuxResetAccountSelector({
               );
             }),
       }),
+      selected && !loading
+        ? (0, e7.jsx)(CodexMuxAccountActions, {
+            account: selected,
+            onChanged,
+          })
+        : null,
+    ],
+  });
+}
+
+// Per-subscription controls shown under the picker in the Usage sheet.
+function CodexMuxAccountActions({ account, onChanged }) {
+  const [busy, setBusy] = kXc.useState("");
+  const [message, setMessage] = kXc.useState("");
+  kXc.useEffect(() => {
+    setMessage("");
+  }, [account.id]);
+
+  async function run(action, work, done) {
+    if (busy) return;
+    setBusy(action);
+    setMessage("");
+    try {
+      await work();
+      if (done) setMessage(done);
+      await onChanged?.();
+    } catch (requestError) {
+      setMessage(requestError.message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const button = (action, label, onClick, options = {}) =>
+    (0, e7.jsx)(
+      "button",
+      {
+        type: "button",
+        disabled: Boolean(busy) || options.disabled,
+        title: options.title,
+        className: [
+          "rounded-lg border border-token-border px-2.5 py-1 text-xs transition-colors",
+          "hover:bg-token-foreground/5 disabled:cursor-default disabled:opacity-50",
+          options.danger ? "text-token-text-error" : "text-token-text-primary",
+        ].join(" "),
+        onClick,
+        children: busy === action ? "Working…" : label,
+      },
+      action,
+    );
+
+  return (0, e7.jsxs)("div", {
+    className: "mt-2 flex flex-col gap-2 px-1",
+    children: [
+      (0, e7.jsx)("div", {
+        className: "text-xs text-token-text-secondary",
+        children: codexMuxUsageDetails(account),
+      }),
+      (0, e7.jsxs)("div", {
+        className: "flex flex-wrap gap-2",
+        children: [
+          account.preferred
+            ? button("pin", "Stop pinning new chats", () =>
+                run("pin", () => codexMuxSetPreferredAccount(null), "New chats are balanced automatically."),
+              )
+            : button("pin", "Use for new chats", () =>
+                run("pin", () => codexMuxSetPreferredAccount(account.id), `New chats will use ${account.label} while it has usage.`),
+              ),
+          button("refresh", "Refresh plan & usage", () =>
+            run("refresh", () => codexMuxRefreshAccount(account.id), "Refreshed from ChatGPT."),
+          ),
+          account.controller
+            ? null
+            : button(
+                "pause",
+                "Pause",
+                () =>
+                  run(
+                    "pause",
+                    () => codexMuxUpdateAccount(account.id, { enabled: false }),
+                    `${account.label} is paused. Resume it from the account menu.`,
+                  ),
+                { title: "Stop routing chats to this subscription" },
+              ),
+          account.controller
+            ? null
+            : button(
+                "remove",
+                "Remove",
+                () => {
+                  if (!window.confirm(`Remove ${account.label} from the router? Its sign-in is kept in a recoverable folder.`)) return;
+                  run("remove", () => codexMuxRemoveAccount(account.id));
+                },
+                {
+                  danger: true,
+                  disabled: account.threadCount > 0,
+                  title:
+                    account.threadCount > 0
+                      ? `${account.label} owns ${account.threadCount} chat(s). Pause it instead.`
+                      : "Remove this subscription",
+                },
+              ),
+        ],
+      }),
+      message
+        ? (0, e7.jsx)("div", {
+            className: "text-xs text-token-text-tertiary",
+            children: message,
+          })
+        : null,
     ],
   });
 }
@@ -395,11 +591,19 @@ function CodexMuxAccountMenu() {
         const payload = JSON.parse(event.data);
         if (
           payload.type === "account-updated" &&
-          payload.accountId === loginAccountId
+          payload.accountId === loginAccountId &&
+          payload.data?.connected &&
+          !payload.data?.needsReauth
         ) {
           setLogin(null);
         }
-        if (payload.type === "account-updated") refresh();
+        if (
+          payload.type === "account-updated" ||
+          payload.type === "account-removed" ||
+          payload.type === "routing-updated"
+        ) {
+          refresh();
+        }
       } catch {}
     };
     const warmupTimer = setTimeout(refresh, 2_000);
@@ -425,8 +629,10 @@ function CodexMuxAccountMenu() {
     return () => window.removeEventListener("keydown", allowEscapeDismissal, true);
   }, [login]);
 
-  const connected = accounts.filter(
-    (account) => account.connected && account.enabled,
+  const connected = accounts.filter(codexMuxIsUsable);
+  const pinned = connected.find((account) => account.preferred) || null;
+  const pinnedUnavailable = accounts.find(
+    (account) => account.preferred && !codexMuxIsUsable(account),
   );
   const bindingWindows = connected.map((account) =>
     codexMuxBindingWindow(account.rateLimits),
@@ -439,31 +645,44 @@ function CodexMuxAccountMenu() {
     0,
   );
 
-  async function addSubscription(event) {
-    event.preventDefault();
+  async function perform(event, work) {
+    event?.preventDefault?.();
     if (busy) return;
     setBusy(true);
     setError("");
     try {
-      const created = await codexMuxRequest("/accounts", {
-        method: "POST",
-        body: JSON.stringify({ label: `Subscription ${connected.length + 1}` }),
-      });
-      const result = await codexMuxRequest(`/accounts/${created.account.id}/login`, {
-        method: "POST",
-        body: JSON.stringify({ mode: "chatgptDeviceCode" }),
-      });
-      const pendingLogin = result.login
-        ? { ...result.login, accountId: created.account.id }
-        : null;
-      setCodeCopied(false);
-      setLogin(pendingLogin);
+      await work();
       await refresh();
     } catch (requestError) {
       setError(requestError.message);
     } finally {
       setBusy(false);
     }
+  }
+
+  async function startSignIn(accountId) {
+    const result = await codexMuxRequest(`/accounts/${encodeURIComponent(accountId)}/login`, {
+      method: "POST",
+      body: JSON.stringify({ mode: "chatgptDeviceCode" }),
+    });
+    setCodeCopied(false);
+    setLogin(result.login ? { ...result.login, accountId } : null);
+  }
+
+  function addSubscription(event) {
+    // The router reuses a slot whose sign-in was never finished, and it picks
+    // an unused "Subscription N" label itself.
+    return perform(event, async () => {
+      const created = await codexMuxRequest("/accounts", {
+        method: "POST",
+        body: JSON.stringify({ label: "" }),
+      });
+      await startSignIn(created.account.id);
+    });
+  }
+
+  function choosePreferred(event, accountId) {
+    return perform(event, () => codexMuxSetPreferredAccount(accountId));
   }
 
   async function copyCodeAndContinue(event) {
@@ -495,6 +714,13 @@ function CodexMuxAccountMenu() {
     }
   }
 
+  const avatarIcon = (account) => (iconProps) =>
+    (0, e7.jsx)(CodexMuxAccountAvatar, {
+      ...iconProps,
+      imageUrl: account.profileImageUrl,
+      label: account.label,
+    });
+
   const rows = [];
   rows.push(
     (0, e7.jsx)(
@@ -520,6 +746,74 @@ function CodexMuxAccountMenu() {
       "codex-mux-total",
     ),
   );
+
+  if (connected.length > 1) {
+    const routingSummary = pinned ? pinned.label : "Automatic";
+    const routingDetail = pinned
+      ? `Pinned to ${pinned.label} while it has usage`
+      : pinnedUnavailable
+        ? `${pinnedUnavailable.label} is unavailable, balancing automatically`
+        : "Balanced across subscriptions";
+    const choices = [
+      (0, e7.jsx)(
+        _H,
+        {
+          RightIcon: pinned ? undefined : CodexMuxCheckIcon,
+          SubText: "Spread new chats across subscriptions by remaining usage",
+          onSelect: (event) => choosePreferred(event, null),
+          children: "Automatic",
+        },
+        "codex-mux-route-auto",
+      ),
+      ...connected.map((account) =>
+        (0, e7.jsx)(
+          _H,
+          {
+            LeftIcon: avatarIcon(account),
+            RightIcon: account.preferred ? CodexMuxCheckIcon : undefined,
+            SubText: codexMuxUsageDetails(account),
+            subTextAllowWrap: true,
+            onSelect: (event) => choosePreferred(event, account.id),
+            children: codexMuxAccountTitle(account),
+          },
+          `codex-mux-route-${account.id}`,
+        ),
+      ),
+    ];
+    rows.push((0, e7.jsx)(CH.Separator, {}, "codex-mux-routing-separator"));
+    if (CH.FlyoutSubmenuItem) {
+      rows.push(
+        (0, e7.jsx)(
+          CH.FlyoutSubmenuItem,
+          {
+            LeftIcon: CodexMuxRouteIcon,
+            label: "New chats use",
+            tooltipText: routingDetail,
+            rightIcon: (0, e7.jsx)("span", {
+              className: "ms-2 max-w-28 truncate text-token-description-foreground",
+              children: routingSummary,
+            }),
+            children: choices,
+          },
+          "codex-mux-routing",
+        ),
+      );
+    } else {
+      rows.push(
+        (0, e7.jsx)(
+          _H,
+          {
+            LeftIcon: CodexMuxRouteIcon,
+            SubText: pinned ? `${routingDetail} · Click for automatic` : routingDetail,
+            onSelect: (event) => choosePreferred(event, null),
+            children: `New chats use: ${routingSummary}`,
+          },
+          "codex-mux-routing",
+        ),
+      );
+    }
+  }
+
   if (connected.length > 0) {
     rows.push(
       (0, e7.jsx)(CH.Separator, {}, "codex-mux-accounts-separator"),
@@ -530,54 +824,84 @@ function CodexMuxAccountMenu() {
     const binding = codexMuxBindingWindow(account.rateLimits);
     const remaining =
       binding == null ? null : Math.max(0, 100 - binding.usedPercent);
+    const credits = codexMuxCreditsText(account.credits);
     rows.push(
       (0, e7.jsx)(
         _H,
         {
-          LeftIcon: (iconProps) =>
-            (0, e7.jsx)(CodexMuxAccountAvatar, {
-              ...iconProps,
-              imageUrl: account.profileImageUrl,
-              label: account.label,
-            }),
-          SubText: account.email
-            ? (0, e7.jsx)(CodexMuxMaskedEmail, { email: account.email })
-            : account.planType || "ChatGPT subscription",
-          className: "group",
-          rightIcon: (0, e7.jsx)("span", {
-            className: "text-token-description-foreground tabular-nums",
-            children: remaining == null ? "–" : `${Math.round(remaining)}%`,
+          LeftIcon: avatarIcon(account),
+          SubText: (0, e7.jsxs)(e7.Fragment, {
+            children: [
+              account.email
+                ? (0, e7.jsx)(CodexMuxMaskedEmail, { email: account.email })
+                : account.planLabel || "ChatGPT subscription",
+              credits ? ` · ${credits}` : null,
+            ],
           }),
-          children: account.planLabel
-            ? `${account.label} · ${account.planLabel}`
-            : account.label,
+          className: "group",
+          tooltipText: `${codexMuxUsageDetails(account)}. ${
+            account.preferred
+              ? "New chats use this subscription. Click to go back to automatic."
+              : "Click to use this subscription for new chats."
+          }`,
+          onSelect: (event) =>
+            choosePreferred(event, account.preferred ? null : account.id),
+          rightIcon: (0, e7.jsxs)("span", {
+            className: "flex items-center gap-1 text-token-description-foreground tabular-nums",
+            children: [
+              account.preferred
+                ? (0, e7.jsx)(CodexMuxPinIcon, { className: "icon-xs" })
+                : null,
+              remaining == null ? "–" : `${Math.round(remaining)}%`,
+            ],
+          }),
+          children: codexMuxAccountTitle(account),
         },
         `codex-mux-account-${account.id}`,
       ),
     );
   }
 
-  for (const account of accounts.filter(
-    (account) =>
-      !account.connected &&
-      typeof account.error === "string" &&
-      account.error.trim() !== "",
-  )) {
+  // Accounts that exist but cannot take chats, each with the one action that
+  // fixes it.
+  for (const account of accounts) {
+    if (codexMuxIsUsable(account)) continue;
+    let status;
+    let detail;
+    let tone;
+    let action;
+    if (account.connected && account.needsReauth) {
+      status = "Sign-in expired";
+      detail = "ChatGPT rejected this sign-in (common after a plan change). Click to sign in again.";
+      tone = "danger";
+      action = (event) => perform(event, () => startSignIn(account.id));
+    } else if (!account.enabled) {
+      status = "Paused";
+      detail = "Not used for chats. Click to resume.";
+      action = (event) =>
+        perform(event, () => codexMuxUpdateAccount(account.id, { enabled: true }));
+    } else if (!account.connected && typeof account.error === "string" && account.error.trim() !== "") {
+      status = "Reconnecting";
+      detail = "Couldn’t refresh this subscription. Retrying automatically.";
+      tone = "danger";
+    } else if (!account.connected && !account.controller) {
+      status = "Not signed in";
+      detail = "Click to finish signing in.";
+      action = (event) => perform(event, () => startSignIn(account.id));
+    } else {
+      continue;
+    }
     rows.push(
       (0, e7.jsx)(
         _H,
         {
-          LeftIcon: (iconProps) =>
-            (0, e7.jsx)(CodexMuxAccountAvatar, {
-              ...iconProps,
-              imageUrl: account.profileImageUrl,
-              label: account.label,
-            }),
-          SubText: "Couldn’t refresh this subscription. Retrying automatically.",
-          tone: "danger",
+          LeftIcon: avatarIcon(account),
+          SubText: detail,
+          tone,
           allowWrap: true,
           subTextAllowWrap: true,
-          children: `${account.label} · Reconnecting`,
+          onSelect: action,
+          children: `${account.label} · ${status}`,
         },
         `codex-mux-unavailable-${account.id}`,
       ),
@@ -627,7 +951,7 @@ function CodexMuxAccountMenu() {
         {
           LeftIcon: CodexMuxPlusIcon,
           onSelect: addSubscription,
-          children: busy ? "Adding subscription…" : "Add another subscription",
+          children: busy ? "Working…" : "Add another subscription",
         },
         "codex-mux-add",
       ),
@@ -635,6 +959,54 @@ function CodexMuxAccountMenu() {
   }
   rows.push((0, e7.jsx)(CH.Separator, {}, "codex-mux-separator"));
   return (0, e7.jsx)(e7.Fragment, { children: rows });
+}
+
+function CodexMuxCheckIcon(props) {
+  return (0, e7.jsx)("svg", {
+    viewBox: "0 0 20 20",
+    fill: "none",
+    "aria-hidden": true,
+    ...props,
+    children: (0, e7.jsx)("path", {
+      d: "M4.75 10.5l3.5 3.5 7-8",
+      stroke: "currentColor",
+      strokeWidth: 1.6,
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+    }),
+  });
+}
+
+function CodexMuxPinIcon(props) {
+  return (0, e7.jsx)("svg", {
+    viewBox: "0 0 20 20",
+    fill: "none",
+    "aria-label": "Used for new chats",
+    ...props,
+    children: (0, e7.jsx)("path", {
+      d: "M7.75 3.75h4.5l-.75 4.5 2.75 2.5v1h-8.5v-1l2.75-2.5-.75-4.5zM10 11.75v4.5",
+      stroke: "currentColor",
+      strokeWidth: 1.4,
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+    }),
+  });
+}
+
+function CodexMuxRouteIcon(props) {
+  return (0, e7.jsx)("svg", {
+    viewBox: "0 0 20 20",
+    fill: "none",
+    "aria-hidden": true,
+    ...props,
+    children: (0, e7.jsx)("path", {
+      d: "M4.25 5.75h7.5a3 3 0 010 6h-3.5a2.5 2.5 0 000 5h7.5M13.25 14.25l2.5 2.5-2.5 2.5M6.25 3.25l-2.5 2.5 2.5 2.5",
+      stroke: "currentColor",
+      strokeWidth: 1.4,
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+    }),
+  });
 }
 
 function codexMuxBindingWindow(rateLimits) {
@@ -779,9 +1151,7 @@ function CodexMuxProfileAvatarStack({ onSelect }) {
     codexMuxRequest("/accounts")
       .then((result) => {
         if (!live) return;
-        const connected = (result.accounts || []).filter(
-          (account) => account.connected && account.enabled,
-        );
+        const connected = (result.accounts || []).filter(codexMuxIsUsable);
         globalThis.__codexMuxCombinedProfileAccounts = connected;
         setAccounts(connected);
       })
@@ -966,6 +1336,9 @@ globalThis.codexMuxRateLimitResets = codexMuxRateLimitResets;
 globalThis.codexMuxConsumeRateLimitReset = codexMuxConsumeRateLimitReset;
 globalThis.codexMuxAvailableResetCount = codexMuxAvailableResetCount;
 globalThis.codexMuxBindingWindow = codexMuxBindingWindow;
+globalThis.codexMuxIsUsable = codexMuxIsUsable;
+globalThis.codexMuxCreditsText = codexMuxCreditsText;
+globalThis.codexMuxUsageDetails = codexMuxUsageDetails;
 globalThis.CodexMuxProfileAvatarStack = (props) =>
   (0, e7.jsx)(CodexMuxProfileAvatarStack, props || {});
 globalThis.CodexMuxPluginScope = () =>

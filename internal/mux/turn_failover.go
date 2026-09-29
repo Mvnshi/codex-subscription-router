@@ -87,6 +87,13 @@ func (m *Multiplexer) takeInflightTurn(threadID string) (protocol.Message, bool)
 	return message, ok
 }
 
+func (m *Multiplexer) hasInflightTurn(threadID string) bool {
+	m.inflightMu.Lock()
+	defer m.inflightMu.Unlock()
+	_, ok := m.inflightTurns[threadID]
+	return ok
+}
+
 func (m *Multiplexer) forgetInflightTurn(threadID string) {
 	if threadID == "" {
 		return

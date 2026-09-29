@@ -315,14 +315,23 @@ starts another sign-in.
 
 | Situation | Behaviour |
 | --- | --- |
-| New chat | Assigned by quota-at-risk, banked resets, and short-window pressure |
+| New chat | Assigned by quota-at-risk, banked resets, and short-window pressure — or to the pinned subscription while it has usage |
 | Follow-up | Sent to the thread's persisted account owner |
 | Primary depleted | Native usage surfaces show pooled usage; limit banners wait for the whole pool |
 | Owner depleted | Continued through another account with capacity |
 | Every account depleted | Combined quota alert with the next known reset |
-| Account disabled | Excluded from routing and pooled usable quota |
+| Account paused | Excluded from routing and pooled usable quota |
+| Sign-in rejected | Excluded until it signs in again; refreshed once automatically |
 
-The subscription assigned to the current thread appears in its pinned summary.
+The subscription assigned to the current thread appears in its pinned summary,
+where **Continue this chat on** moves the chat to another subscription. Chats
+live on this Mac, so every subscription sees the same local chats and projects.
+
+To choose the subscription for new chats, open the profile menu and use
+**New chats use** (or click a subscription row). Click it again, or choose
+**Automatic**, to return to balanced routing. The Usage sheet shows each
+subscription's plan, credits, and windows, with actions to refresh, pause, or
+remove it.
 
 ## Profiles, plugins, and resets
 

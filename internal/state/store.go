@@ -29,6 +29,9 @@ type persistedState struct {
 	Version     int               `json:"version"`
 	Accounts    []Account         `json:"accounts"`
 	ThreadOwner map[string]string `json:"threadOwner"`
+	// PreferredAccount pins new chats to one subscription while it has
+	// capacity. Empty means automatic routing. Older builds ignore the field.
+	PreferredAccount string `json:"preferredAccount,omitempty"`
 }
 
 // Store persists only routing metadata. OAuth credentials and conversation
@@ -40,6 +43,7 @@ type Store struct {
 	primaryCodexHome string
 	accounts         []Account
 	owners           map[string]string
+	preferred        string
 }
 
 func Open(root, primaryCodexHome string) (*Store, error) {
@@ -73,6 +77,7 @@ func Open(root, primaryCodexHome string) (*Store, error) {
 		if persisted.ThreadOwner != nil {
 			store.owners = persisted.ThreadOwner
 		}
+		store.preferred = persisted.PreferredAccount
 	case errors.Is(err, os.ErrNotExist):
 		store.accounts = []Account{{
 			ID:         "primary",
@@ -105,8 +110,8 @@ func (s *Store) Root() string {
 
 // SyncManagedConfig propagates desktop-managed configuration (including
 // plugins, marketplaces, skills, and MCP server definitions) to every
-// isolated subscription. Credential stores and project trust remain local to
-// each account; syncIsolatedConfig deliberately excludes both.
+// isolated subscription, together with Primary's project trust. Credential
+// stores remain local to each account; syncIsolatedConfig excludes them.
 func (s *Store) SyncManagedConfig() error {
 	s.mu.RLock()
 	accounts := slices.Clone(s.accounts)
@@ -161,7 +166,7 @@ func (s *Store) AddAccount(label string) (Account, error) {
 
 	label = strings.TrimSpace(label)
 	if label == "" {
-		label = fmt.Sprintf("Subscription %d", len(s.accounts)+1)
+		label = s.nextDefaultLabelLocked()
 	}
 	id, err := randomID()
 	if err != nil {
@@ -217,6 +222,104 @@ func (s *Store) UpdateAccount(id string, label *string, enabled *bool) (Account,
 	return Account{}, fmt.Errorf("account %q not found", id)
 }
 
+// nextDefaultLabelLocked returns the lowest unused "Subscription N" label.
+// Counting accounts instead produced duplicate labels whenever a sign-in was
+// abandoned or an account was removed.
+func (s *Store) nextDefaultLabelLocked() string {
+	used := make(map[string]struct{}, len(s.accounts))
+	for _, account := range s.accounts {
+		used[strings.ToLower(account.Label)] = struct{}{}
+	}
+	for number := 2; ; number++ {
+		label := fmt.Sprintf("Subscription %d", number)
+		if _, taken := used[strings.ToLower(label)]; !taken {
+			return label
+		}
+	}
+}
+
+// RemoveAccount forgets a secondary subscription. The controller cannot be
+// removed, and neither can an account that still owns chats: those chats
+// would lose the only app-server that can resume them. The account's Codex
+// home is moved under removed/ rather than deleted so it stays recoverable.
+func (s *Store) RemoveAccount(id string) (Account, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	index := slices.IndexFunc(s.accounts, func(account Account) bool { return account.ID == id })
+	if index < 0 {
+		return Account{}, fmt.Errorf("account %q not found", id)
+	}
+	account := s.accounts[index]
+	if account.Controller || samePath(account.CodexHome, s.primaryCodexHome) {
+		return Account{}, errors.New("the primary subscription cannot be removed")
+	}
+	owned := 0
+	for _, owner := range s.owners {
+		if owner == id {
+			owned++
+		}
+	}
+	if owned > 0 {
+		return Account{}, fmt.Errorf("%s still owns %d chat(s); pause it instead of removing it", account.Label, owned)
+	}
+	s.accounts = slices.Delete(s.accounts, index, index+1)
+	if s.preferred == id {
+		s.preferred = ""
+	}
+	if err := s.saveLocked(); err != nil {
+		return Account{}, err
+	}
+	if err := s.retireAccountHome(account); err != nil {
+		return account, err
+	}
+	return account, nil
+}
+
+func (s *Store) retireAccountHome(account Account) error {
+	accountDir := filepath.Dir(account.CodexHome)
+	expected := filepath.Join(s.root, "accounts", account.ID)
+	if !samePath(accountDir, expected) {
+		// Never move a directory the router did not create.
+		return nil
+	}
+	if _, err := os.Stat(accountDir); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	removedRoot := filepath.Join(s.root, "removed")
+	if err := os.MkdirAll(removedRoot, 0o700); err != nil {
+		return fmt.Errorf("create removed-accounts directory: %w", err)
+	}
+	destination := filepath.Join(removedRoot, fmt.Sprintf("%s-%d", account.ID, time.Now().Unix()))
+	if err := os.Rename(accountDir, destination); err != nil {
+		return fmt.Errorf("retire account home: %w", err)
+	}
+	return nil
+}
+
+// PreferredAccount returns the subscription new chats are pinned to, or ""
+// for automatic routing.
+func (s *Store) PreferredAccount() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.preferred
+}
+
+// SetPreferredAccount pins new chats to id; an empty id restores automatic
+// routing.
+func (s *Store) SetPreferredAccount(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id = strings.TrimSpace(id)
+	if id != "" && !slices.ContainsFunc(s.accounts, func(account Account) bool { return account.ID == id }) {
+		return fmt.Errorf("account %q not found", id)
+	}
+	if s.preferred == id {
+		return nil
+	}
+	s.preferred = id
+	return s.saveLocked()
+}
+
 func (s *Store) ThreadOwner(threadID string) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -249,9 +352,10 @@ func (s *Store) ThreadCounts() map[string]int {
 
 func (s *Store) saveLocked() error {
 	persisted := persistedState{
-		Version:     stateVersion,
-		Accounts:    s.accounts,
-		ThreadOwner: s.owners,
+		Version:          stateVersion,
+		Accounts:         s.accounts,
+		ThreadOwner:      s.owners,
+		PreferredAccount: s.preferred,
 	}
 	data, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {

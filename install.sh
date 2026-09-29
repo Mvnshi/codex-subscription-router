@@ -18,6 +18,33 @@ fail() {
     exit 1
 }
 
+node_is_supported() {
+    local version
+    version="$("$1" -p 'process.versions.node' 2>/dev/null)" || return 1
+    local major="${version%%.*}"
+    local rest="${version#*.}"
+    local minor="${rest%%.*}"
+    [ "${major}" -gt 22 ] || { [ "${major}" -eq 22 ] && [ "${minor}" -ge 12 ]; }
+}
+
+# A shell's default Node (often an old nvm alias) may be too old even though a
+# supported version is installed. Prefer the newest supported nvm install over
+# failing, without changing the user's nvm default.
+use_supported_nvm_node() {
+    local nvm_root="${NVM_DIR:-${HOME}/.nvm}/versions/node"
+    [ -d "${nvm_root}" ] || return 1
+    local candidate
+    local best=""
+    for candidate in $(ls -1 "${nvm_root}" | sort -t. -k1,1V -k2,2n -k3,3n); do
+        if [ -x "${nvm_root}/${candidate}/bin/node" ] && node_is_supported "${nvm_root}/${candidate}/bin/node"; then
+            best="${nvm_root}/${candidate}/bin"
+        fi
+    done
+    [ -n "${best}" ] || return 1
+    export PATH="${best}:${PATH}"
+    log "Using Node.js $(node --version) from ${best}"
+}
+
 require_prerequisites() {
     if [ "$(uname -s)" != "Darwin" ]; then
         fail "Codex Subscription Router supports macOS only."
@@ -27,6 +54,10 @@ require_prerequisites() {
     fi
     if [ ! -d "/Applications/ChatGPT.app" ]; then
         fail "install the official ChatGPT app in /Applications first."
+    fi
+
+    if ! command -v node >/dev/null 2>&1 || ! node_is_supported node; then
+        use_supported_nvm_node || true
     fi
 
     local missing=()

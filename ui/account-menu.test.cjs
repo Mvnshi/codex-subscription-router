@@ -91,3 +91,38 @@ test("missing windows do not invent a limit", () => {
     12,
   );
 });
+
+test("an account with a rejected sign-in is not usable", () => {
+  const base = { enabled: true, connected: true, authType: "chatgpt" };
+  assert.equal(globalThis.codexMuxIsUsable(base), true);
+  assert.equal(globalThis.codexMuxIsUsable({ ...base, needsReauth: true }), false);
+  assert.equal(globalThis.codexMuxIsUsable({ ...base, enabled: false }), false);
+  assert.equal(globalThis.codexMuxIsUsable({ ...base, connected: false }), false);
+  assert.equal(globalThis.codexMuxIsUsable({ ...base, authType: "apiKey" }), false);
+});
+
+test("credits are shown only when the account has some", () => {
+  const text = globalThis.codexMuxCreditsText;
+  assert.equal(text(null), null);
+  assert.equal(text({ hasCredits: false, unlimited: false, balance: "0" }), null);
+  assert.equal(text({ hasCredits: true, unlimited: false, balance: "42.5" }), "42.5 credits");
+  assert.equal(text({ hasCredits: true, unlimited: false, balance: "1" }), "1 credit");
+  assert.equal(text({ hasCredits: true, unlimited: true, balance: null }), "Unlimited credits");
+  assert.equal(text({ hasCredits: true, unlimited: false }), "Credits available");
+});
+
+test("usage details list the short window first and include credits", () => {
+  const details = globalThis.codexMuxUsageDetails({
+    rateLimits: {
+      primary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: null },
+      secondary: { usedPercent: 25, windowDurationMins: 300, resetsAt: null },
+    },
+    credits: { hasCredits: true, unlimited: false, balance: "3" },
+  });
+  assert.equal(details, "5-hour: 75% left · Weekly: 0% left · 3 credits");
+  assert.match(
+    globalThis.codexMuxUsageDetails({ needsReauth: true }),
+    /Sign in again/,
+  );
+  assert.equal(globalThis.codexMuxUsageDetails({}), "Usage unavailable");
+});

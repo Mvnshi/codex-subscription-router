@@ -91,8 +91,10 @@ trust_level = "trusted"
 			t.Fatalf("account config is missing %q:\n%s", expected, text)
 		}
 	}
-	if strings.Contains(text, "/primary-only") {
-		t.Fatalf("primary project trust leaked into account config:\n%s", text)
+	// Every subscription works on the same local folders, so Primary's
+	// project trust is shared rather than re-prompted per account.
+	if !strings.Contains(text, "/primary-only") {
+		t.Fatalf("primary project trust was not shared with the account:\n%s", text)
 	}
 
 	text += `
@@ -170,5 +172,132 @@ func TestUpdateAccountPreservesController(t *testing.T) {
 	}
 	if account.Label != label || account.Enabled || !account.Controller {
 		t.Fatalf("unexpected updated account: %#v", account)
+	}
+}
+
+func TestDefaultLabelsSkipTakenNumbers(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(filepath.Join(root, "mux"), filepath.Join(root, "primary"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _ := store.AddAccount("")
+	third, _ := store.AddAccount("")
+	if second.Label != "Subscription 2" || third.Label != "Subscription 3" {
+		t.Fatalf("unexpected default labels: %q, %q", second.Label, third.Label)
+	}
+	if _, err := store.RemoveAccount(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	fourth, _ := store.AddAccount("")
+	if fourth.Label != "Subscription 2" {
+		t.Fatalf("default label reused a taken number: %q", fourth.Label)
+	}
+	fifth, _ := store.AddAccount("")
+	if fifth.Label != "Subscription 4" {
+		t.Fatalf("default label duplicated an existing one: %q", fifth.Label)
+	}
+}
+
+func TestPreferredAccountPersists(t *testing.T) {
+	root := t.TempDir()
+	primaryHome := filepath.Join(root, "primary")
+	store, err := Open(filepath.Join(root, "mux"), primaryHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetPreferredAccount("missing"); err == nil {
+		t.Fatal("pinning an unknown account must fail")
+	}
+	added, _ := store.AddAccount("Work")
+	if err := store.SetPreferredAccount(added.ID); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(filepath.Join(root, "mux"), primaryHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.PreferredAccount() != added.ID {
+		t.Fatalf("preferred account was not persisted: %q", reopened.PreferredAccount())
+	}
+	if err := reopened.SetPreferredAccount(""); err != nil || reopened.PreferredAccount() != "" {
+		t.Fatalf("automatic routing was not restored: %q (%v)", reopened.PreferredAccount(), err)
+	}
+}
+
+func TestRemoveAccountProtectsPrimaryAndOwnedChats(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(filepath.Join(root, "mux"), filepath.Join(root, "primary"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RemoveAccount("primary"); err == nil {
+		t.Fatal("primary account was removable")
+	}
+	added, _ := store.AddAccount("Work")
+	if err := store.SetThreadOwner("thread-1", added.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RemoveAccount(added.ID); err == nil || !strings.Contains(err.Error(), "owns 1 chat") {
+		t.Fatalf("an account owning chats was removable: %v", err)
+	}
+}
+
+func TestIsolatedAccountsInheritPrimaryProjectTrust(t *testing.T) {
+	root := t.TempDir()
+	primaryHome := filepath.Join(root, "primary")
+	if err := os.MkdirAll(primaryHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	primaryConfig := `model = "gpt-test"
+
+[projects."/work/app"]
+trust_level = "trusted"
+
+[projects."/work/shared"]
+trust_level = "trusted"
+`
+	if err := os.WriteFile(filepath.Join(primaryHome, "config.toml"), []byte(primaryConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(filepath.Join(root, "mux"), primaryHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, err := store.AddAccount("Work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolatedPath := filepath.Join(added.CodexHome, "config.toml")
+	existing, _ := os.ReadFile(isolatedPath)
+	local := string(existing) + `
+[projects."/work/only-here"]
+trust_level = "trusted"
+
+[projects."/work/shared"]
+trust_level = "untrusted"
+`
+	if err := os.WriteFile(isolatedPath, []byte(local), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SyncManagedConfig(); err != nil {
+		t.Fatal(err)
+	}
+	synced, _ := os.ReadFile(isolatedPath)
+	text := string(synced)
+	for _, want := range []string{`[projects."/work/app"]`, `[projects."/work/only-here"]`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %s in synced config:\n%s", want, text)
+		}
+	}
+	if strings.Count(text, `[projects."/work/shared"]`) != 1 || strings.Contains(text, "untrusted") {
+		t.Fatalf("primary project trust did not win:\n%s", text)
+	}
+	if err := store.SyncManagedConfig(); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := os.ReadFile(isolatedPath)
+	if string(again) != text {
+		t.Fatalf("config sync is not stable:\n%s\n---\n%s", text, again)
 	}
 }

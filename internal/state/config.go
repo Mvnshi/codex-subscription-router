@@ -12,7 +12,7 @@ const isolatedCredentialConfig = `cli_auth_credentials_store = "file"
 mcp_oauth_credentials_store = "file"`
 
 // syncIsolatedConfig shares desktop-managed settings and MCP servers with an
-// isolated subscription while keeping its credentials and project trust local.
+// isolated subscription while keeping its credentials local.
 func syncIsolatedConfig(primaryCodexHome, isolatedCodexHome string) error {
 	if isolatedCodexHome == "" {
 		return errors.New("isolated Codex home is required")
@@ -38,7 +38,13 @@ func syncIsolatedConfig(primaryCodexHome, isolatedCodexHome string) error {
 		return !isProjectSection(section)
 	})
 	managed = removeTopLevelCredentialSettings(managed)
-	projects := filterConfig(isolatedConfig, isProjectSection)
+	// Every subscription works on the same local folders, so a project the
+	// Primary account trusts is trusted everywhere. Entries an isolated
+	// account created itself are kept unless Primary defines the same project.
+	projects := mergeProjectSections(
+		filterConfig(primaryConfig, isProjectSection),
+		filterConfig(isolatedConfig, isProjectSection),
+	)
 
 	parts := []string{isolatedCredentialConfig}
 	if managed = strings.TrimSpace(managed); managed != "" {
@@ -101,6 +107,67 @@ func removeTopLevelCredentialSettings(contents string) string {
 		builder.WriteByte('\n')
 	}
 	return builder.String()
+}
+
+// mergeProjectSections returns primary's project tables followed by any of
+// isolated's tables whose project primary does not define. A project's
+// sub-tables (for example [projects."/path".foo]) travel with their parent.
+func mergeProjectSections(primary, isolated string) string {
+	primaryBlocks := projectBlocks(primary)
+	defined := make(map[string]struct{}, len(primaryBlocks))
+	parts := make([]string, 0, len(primaryBlocks))
+	for _, block := range primaryBlocks {
+		defined[block.project] = struct{}{}
+		parts = append(parts, block.text)
+	}
+	for _, block := range projectBlocks(isolated) {
+		if _, ok := defined[block.project]; ok {
+			continue
+		}
+		parts = append(parts, block.text)
+	}
+	return strings.Join(parts, "")
+}
+
+type projectBlock struct {
+	project string
+	text    string
+}
+
+func projectBlocks(contents string) []projectBlock {
+	blocks := make([]projectBlock, 0)
+	var current *projectBlock
+	for _, line := range strings.SplitAfter(contents, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			section := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]"))
+			key := projectKey(section)
+			if current == nil || current.project != key {
+				blocks = append(blocks, projectBlock{project: key})
+				current = &blocks[len(blocks)-1]
+			}
+		}
+		if current == nil {
+			continue
+		}
+		current.text += line
+	}
+	return blocks
+}
+
+// projectKey reduces `projects."/a/b".sub` to `projects."/a/b"`.
+func projectKey(section string) string {
+	rest := strings.TrimPrefix(section, "projects")
+	rest = strings.TrimPrefix(rest, ".")
+	if strings.HasPrefix(rest, "\"") {
+		if end := strings.Index(rest[1:], "\""); end >= 0 {
+			return "projects." + rest[:end+2]
+		}
+	}
+	if dot := strings.Index(rest, "."); dot >= 0 {
+		rest = rest[:dot]
+	}
+	return "projects." + rest
 }
 
 func isProjectSection(section string) bool {

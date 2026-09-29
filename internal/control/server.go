@@ -30,6 +30,7 @@ func New(address, token string, multiplexer *mux.Multiplexer, uiTests bool) *Ser
 	router.HandleFunc("/v1/accounts", server.accounts)
 	router.HandleFunc("/v1/accounts/", server.accountAction)
 	router.HandleFunc("/v1/thread-account", server.threadAccount)
+	router.HandleFunc("/v1/routing", server.routing)
 	router.HandleFunc("/v1/profile/combined", server.combinedProfile)
 	router.HandleFunc("/v1/events", server.events)
 	if uiTests {
@@ -121,6 +122,25 @@ func (s *Server) threadAccount(response http.ResponseWriter, request *http.Reque
 		writeJSON(response, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
 		return
 	}
+	if request.Method == http.MethodPost {
+		var input struct {
+			ThreadID  string `json:"threadId"`
+			AccountID string `json:"accountId"`
+		}
+		if err := decodeJSON(request, &input); err != nil {
+			writeJSON(response, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		ctx, cancel := context.WithTimeout(request.Context(), 60*time.Second)
+		defer cancel()
+		account, err := s.mux.MoveThread(ctx, input.ThreadID, input.AccountID)
+		if err != nil {
+			writeJSON(response, http.StatusConflict, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(response, http.StatusOK, map[string]any{"account": account})
+		return
+	}
 	if request.Method != http.MethodGet {
 		methodNotAllowed(response)
 		return
@@ -138,6 +158,38 @@ func (s *Server) threadAccount(response http.ResponseWriter, request *http.Reque
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]any{"account": account})
+}
+
+// routing reads or changes where new chats go: automatic balancing, or a
+// pinned subscription.
+func (s *Server) routing(response http.ResponseWriter, request *http.Request) {
+	if !s.authorized(request) {
+		writeJSON(response, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+		return
+	}
+	switch request.Method {
+	case http.MethodGet:
+		writeJSON(response, http.StatusOK, map[string]any{"routing": s.mux.Routing()})
+	case http.MethodPut, http.MethodPost:
+		var input struct {
+			PreferredAccountID *string `json:"preferredAccountId"`
+		}
+		if err := decodeJSON(request, &input); err != nil {
+			writeJSON(response, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		preferred := ""
+		if input.PreferredAccountID != nil {
+			preferred = *input.PreferredAccountID
+		}
+		if err := s.mux.SetPreferredAccount(preferred); err != nil {
+			writeJSON(response, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(response, http.StatusOK, map[string]any{"routing": s.mux.Routing()})
+	default:
+		methodNotAllowed(response)
+	}
 }
 
 func (s *Server) Serve(listener net.Listener) error {
@@ -165,7 +217,10 @@ func (s *Server) accounts(response http.ResponseWriter, request *http.Request) {
 	case http.MethodGet:
 		ctx, cancel := context.WithTimeout(request.Context(), accountListTimeout)
 		defer cancel()
-		writeJSON(response, http.StatusOK, map[string]any{"accounts": s.mux.Accounts(ctx)})
+		writeJSON(response, http.StatusOK, map[string]any{
+			"accounts": s.mux.Accounts(ctx),
+			"routing":  s.mux.Routing(),
+		})
 	case http.MethodPost:
 		var input struct {
 			Label string `json:"label"`
@@ -202,6 +257,14 @@ func (s *Server) accountAction(response http.ResponseWriter, request *http.Reque
 	ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
 	defer cancel()
 
+	if len(parts) == 1 && request.Method == http.MethodDelete {
+		if err := s.mux.RemoveAccount(ctx, accountID); err != nil {
+			writeJSON(response, http.StatusConflict, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(response, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
 	if len(parts) == 1 && request.Method == http.MethodPatch {
 		var input struct {
 			Label   *string `json:"label"`
@@ -268,6 +331,13 @@ func (s *Server) accountAction(response http.ResponseWriter, request *http.Reque
 			login = map[string]any{}
 		}
 		writeJSON(response, http.StatusOK, map[string]any{"login": login})
+	case "refresh":
+		account, err := s.mux.RefreshAccount(ctx, accountID)
+		if err != nil {
+			writeJSON(response, http.StatusBadGateway, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(response, http.StatusOK, map[string]any{"account": account})
 	case "logout":
 		if err := s.mux.Logout(ctx, accountID); err != nil {
 			writeJSON(response, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -330,7 +400,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 			response.Header().Set("Vary", "Origin")
 		}
 		response.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Codex-Mux-Token")
-		response.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+		response.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		response.Header().Set("Cache-Control", "no-store")
 		response.Header().Set("Referrer-Policy", "no-referrer")
 		response.Header().Set("X-Content-Type-Options", "nosniff")

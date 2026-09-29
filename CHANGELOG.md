@@ -7,6 +7,20 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Choose which subscription new chats use: **New chats use** in the profile
+  menu (or click an account row) pins new chats to one subscription while it
+  has usage, falling back to automatic routing when it is depleted, paused, or
+  signed out. Exposed as `GET/PUT /v1/routing`.
+- **Continue this chat on** in a chat's Subscription summary moves an existing
+  local chat to another subscription (`POST /v1/thread-account`).
+- Credit balances per subscription in the menu, the Usage sheet, and tooltips,
+  plus per-window usage details (5-hour and weekly, with reset times).
+- Usage sheet actions per subscription: use for new chats, refresh plan and
+  usage, pause, and remove (`POST /v1/accounts/{id}/refresh`,
+  `DELETE /v1/accounts/{id}`; removed homes are moved to
+  `~/.codex-mux/removed`).
+- Paused, expired, and unfinished sign-ins are listed in the menu with a
+  one-click fix.
 - Compatibility with official ChatGPT `26.810.52044` (build `6662`).
 - One-command installer with safe source updates, prerequisite checks, signed
   rebuilds, recoverable upgrades, and automatic launch.
@@ -27,6 +41,26 @@ this project uses [Semantic Versioning](https://semver.org/).
   `--allow-untested-source` is required until one is recorded.
 
 ### Fixed
+
+- Plan upgrades now show immediately: the plan comes from the live usage
+  endpoint instead of the cached ID token, and a mismatch triggers a
+  background token refresh so Codex itself sees the new plan.
+- A subscription whose sign-in ChatGPT rejected (`401`/`token_invalidated`,
+  common after a plan change) was still counted as connected and could be
+  routed chats; it is now flagged, excluded from routing and pooled usage, and
+  refreshed once automatically before asking to sign in again.
+- "Add another subscription" reuses an unfinished sign-in slot instead of
+  creating another one, and default labels no longer repeat
+  ("Subscription 3" ×3).
+- The merged chat list no longer reassigns a chat's owner to whichever account
+  answered last, and a chat listed by several accounts after failover appears
+  once.
+- A follow-up in a chat whose owner's five-hour window is spent now moves
+  immediately instead of failing first.
+- Every subscription inherits the Primary account's trusted projects, so local
+  projects behave the same whichever account runs the chat.
+- The installer uses a supported nvm-installed Node.js when the shell default
+  is older than 22.12.
 
 - Empty `patch_arguments` expansion in `install.sh` under bash 3.2 `set -u`.
 - Slow profile-photo requests no longer block the first subscription list from

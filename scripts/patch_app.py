@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import struct
 import json
+import mmap
 import os
 import plistlib
 import re
@@ -63,6 +64,10 @@ TESTED_SOURCE_BUILDS = {
         "26.901.51231",
         "8109",
     ): "64fc2f27d2dddfa968acfacbe5e4e0328071bdc406351ff4a7d18f0b4692c83d",
+    (
+        "26.928.20755",
+        "12246",
+    ): "2301fba40bd8fa237ccdb1369363e1deefaf27953da2d767d428225d5e9eedee",
 }
 EXPECTED_CUA_IDENTIFIER_REPLACEMENTS = 49
 EXPECTED_CUA_IDENTIFIER_REPLACEMENTS_BY_BUILD = {
@@ -70,6 +75,7 @@ EXPECTED_CUA_IDENTIFIER_REPLACEMENTS_BY_BUILD = {
     ("26.810.52044", "6662"): 99,
     ("26.901.22334", "7746"): 49,
     ("26.901.51231", "8109"): 49,
+    ("26.928.20755", "12246"): 49,
 }
 DEFAULT_CUA_SERVICE_LAYOUT = (("Codex Computer Use.app", 17),)
 EXPECTED_CUA_SERVICE_LAYOUT_BY_BUILD = {
@@ -80,6 +86,7 @@ EXPECTED_CUA_SERVICE_LAYOUT_BY_BUILD = {
     ),
     ("26.901.22334", "7746"): DEFAULT_CUA_SERVICE_LAYOUT,
     ("26.901.51231", "8109"): DEFAULT_CUA_SERVICE_LAYOUT,
+    ("26.928.20755", "12246"): DEFAULT_CUA_SERVICE_LAYOUT,
 }
 EXPECTED_ASAR_CUA_IDENTIFIER_REPLACEMENTS = 17
 EXPECTED_ASAR_CUA_IDENTIFIER_REPLACEMENTS_BY_BUILD = {
@@ -87,6 +94,7 @@ EXPECTED_ASAR_CUA_IDENTIFIER_REPLACEMENTS_BY_BUILD = {
     ("26.810.52044", "6662"): 20,
     ("26.901.22334", "7746"): 16,
     ("26.901.51231", "8109"): 16,
+    ("26.928.20755", "12246"): 16,
 }
 
 
@@ -738,16 +746,7 @@ def sign_independent_app(
         service_layout,
     )
     sign_computer_use_code(app, identity, computer_use_entitlements, service_layout)
-    run(
-        [
-            "codesign",
-            "--force",
-            "--sign",
-            identity,
-            "--timestamp=none",
-            str(app / "Contents" / "Resources" / "codex"),
-        ]
-    )
+    sign_bundled_codex(app, identity)
     # Seal every nested desktop bundle from the leaves upward. This keeps the
     # copied app independently valid even when the official source contains a
     # stale nested signature (newer builds add both Chromium frameworks and a
@@ -800,6 +799,41 @@ def sign_independent_app(
             str(app),
         ]
     )
+
+
+def bundled_codex_layout(resources: Path) -> tuple[Path, Path | None]:
+    """Return the Codex executable the desktop app launches, and its bundle.
+
+    Builds up to 8109 ship a single `Resources/codex`. From 12246 the app runs
+    `Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex` directly (the
+    `codex-cli/bin/codex` script only forwards to it).
+    """
+    legacy = resources / "codex"
+    if legacy.is_file() and is_mach_o(legacy):
+        return legacy, None
+    cli_bundle = resources / "codex-cli" / "CodexCLI.app"
+    executable = cli_bundle / "Contents" / "MacOS" / "codex"
+    if executable.is_file():
+        return executable, cli_bundle
+    raise RuntimeError("could not find the bundled Codex executable")
+
+
+def sign_bundled_codex(app: Path, identity: str) -> None:
+    """Sign the multiplexer and, in the packaged layout, the whole Codex CLI."""
+    resources = app / "Contents" / "Resources"
+    legacy = resources / "codex"
+    if legacy.is_file() and is_mach_o(legacy):
+        run(["codesign", "--force", "--sign", identity, "--timestamp=none", str(legacy)])
+        return
+    package = resources / "codex-cli"
+    for executable in sorted(
+        (candidate for candidate in package.rglob("*") if is_mach_o(candidate)),
+        key=lambda candidate: len(candidate.parts),
+        reverse=True,
+    ):
+        sign_runtime_executable(executable, identity)
+    sign_runtime_bundle(package / "CodexCLI.app", identity)
+    run(["codesign", "--verify", "--strict", str(package / "CodexCLI.app")])
 
 
 def load_or_create_token() -> str:
@@ -948,6 +982,10 @@ def patch_renderer(extracted: Path, token: str) -> None:
         1,
     )
     index_path.write_text(index, encoding="utf-8")
+
+    if is_chunked_renderer(webview):
+        patch_chunked_renderer(webview, token)
+        return
 
     initial_bundles = list((webview / "assets").glob("app-initial-*.js"))
     if len(initial_bundles) != 1:
@@ -1811,6 +1849,471 @@ def patch_renderer(extracted: Path, token: str) -> None:
     thread_bundle_path.write_text(thread_bundle, encoding="utf-8")
 
 
+def _sub_once(text: str, pattern: str, replacement, what: str, flags: int = 0) -> str:
+    """Apply a regex replacement that must match exactly once."""
+    compiled = re.compile(pattern, flags)
+    matches = list(compiled.finditer(text))
+    if len(matches) != 1:
+        raise RuntimeError(f"could not find {what} (found {len(matches)} matches)")
+    return compiled.sub(replacement, text, count=1)
+
+
+def _match_once(text: str, pattern: str, what: str, flags: int = 0) -> re.Match[str]:
+    matches = list(re.finditer(pattern, text, flags))
+    if len(matches) != 1:
+        raise RuntimeError(f"could not find {what} (found {len(matches)} matches)")
+    return matches[0]
+
+
+def _asset_containing(assets: Path, pattern: str, marker: str, what: str) -> Path:
+    matches = [
+        path
+        for path in assets.glob(pattern)
+        if marker in path.read_text(encoding="utf-8")
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(f"expected one {what}, found {len(matches)}")
+    return matches[0]
+
+
+def _export_name(bundle: str, local: str) -> str:
+    match = _match_once(
+        bundle, rf"(?<![\w$]){re.escape(local)} as ([\w$]+)(?![\w$])", f"export of {local}"
+    )
+    return match.group(1)
+
+
+def _local_for_export(bundle: str, exported: str) -> str:
+    match = _match_once(
+        bundle, rf"(?<![\w$])([\w$]+) as {re.escape(exported)}(?![\w$])", f"local for {exported}"
+    )
+    return match.group(1)
+
+
+def is_chunked_renderer(webview: Path) -> bool:
+    """Builds from 12246 load the profile menu from a lazy chunk."""
+    return any(
+        "ambientUsage:" in path.read_text(encoding="utf-8")
+        and "{sidebarFooter:" in path.read_text(encoding="utf-8")
+        for path in (webview / "assets").glob("profile-dropdown-items-*.js")
+    )
+
+
+def patch_chunked_usage_state(modal: str) -> str:
+    """Own selection inside the loaded modal, beyond the cached lazy wrapper."""
+    ident = r"[\w$]+"
+    component = _match_once(
+        modal, rf"export\{{({ident}) as RateLimitResetModal\}}", "usage modal export"
+    ).group(1)
+    modal = _sub_once(
+        modal, rf"function {re.escape(component)}\(e\)\{{",
+        f"function {component}(e){{globalThis.CodexMuxUseResetAccountState();",
+        "the loaded Usage sheet state",
+    )
+    # The compiler cached the child solely on native props, excluding our
+    # selection. Recreate it and remount its reset form when the account changes.
+    return _sub_once(
+        modal,
+        rf"let ({ident})=({ident}),({ident});return t\[\d+\].{{0,500}}?"
+        rf"\(\3=\(0,({ident})\.jsx\)\(({ident}),"
+        rf"(\{{defaultResetCreditsOpen:{ident},errorMessage:{ident},"
+        rf"initialAvailableCount:{ident},isResetting:{ident},onClose:{ident},"
+        rf"onResetCredit:\1\}})\),t\[\d+\].{{0,500}}?\):\3=t\[\d+\],\3",
+        lambda m: (
+            f"let {m.group(1)}={m.group(2)};return (0,{m.group(4)}.jsx)"
+            f"({m.group(5)},{m.group(6)},window.__codexMuxResetAccountId??`primary`)"
+        ),
+        "the Usage sheet selection propagation",
+    )
+
+
+def patch_chunked_renderer(webview: Path, token: str) -> None:
+    """Patch builds (12246+) whose menu, usage sheet and helpers are split.
+
+    Anchors are matched structurally and the minified names are read from
+    the build itself, so a rebuild with renamed identifiers still patches
+    while any structural change fails closed.
+    """
+    assets = webview / "assets"
+    ident = r"[\w$]+"
+    initial_path = single_asset(assets, "app-initial-*.js", "initial renderer bundle")
+    shared_path = single_asset(assets, "app-shared-*.js", "shared renderer bundle")
+    menu_path = _asset_containing(
+        assets, "profile-dropdown-items-*.js", "ambientUsage:", "profile menu chunk"
+    )
+    modal_path = _asset_containing(
+        assets, "modal-impl-*.js", "as RateLimitResetModal", "usage sheet chunk"
+    )
+    initial = initial_path.read_text(encoding="utf-8")
+    shared = shared_path.read_text(encoding="utf-8")
+    menu = menu_path.read_text(encoding="utf-8")
+    modal = modal_path.read_text(encoding="utf-8")
+    for text, where in ((initial, "initial"), (menu, "menu")):
+        if "CodexMuxAccountMenu" in text:
+            raise RuntimeError(f"source app already contains the multiplexer ({where})")
+
+    # --- profile menu chunk: resolve the names the injected menu uses ---
+    header = _match_once(
+        menu,
+        rf"function ({ident})\(e\)\{{let {ident}=\(0,{ident}\.c\)\(\d+\),"
+        rf"\{{sidebarFooter:{ident},ambientUsage:{ident},open:{ident},onClose:{ident}\}}=e,"
+        rf"({ident})=({ident})\(({ident})\),",
+        "the native profile menu component",
+    )
+    scope_variable, scope_hook, scope_key = header.group(2, 3, 4)
+    menu_start = header.start()
+    menu_body = menu[menu_start : menu_start + 200_000]
+    opener = _match_once(
+        menu_body,
+        rf"({ident})\({re.escape(scope_variable)},({ident}),\{{defaultResetCreditsOpen:!0",
+        "the native usage sheet opener",
+    )
+    open_modal, usage_modal = opener.group(1, 2)
+    react = _match_once(
+        menu_body[:4000], rf"\(0,({ident})\.useState\)", "React in the profile menu"
+    ).group(1)
+    item = re.search(
+        rf"\(0,({ident})\.jsx\)\(({ident}),\{{(?:leftIconAsset|LeftIcon):{ident},"
+        r'"aria-label":' + ident + r",className:`opacity-50`",
+        menu_body,
+    )
+    if item is None:
+        raise RuntimeError("could not find the native profile menu item")
+    jsx, menu_item = item.group(1, 2)
+    namespaces = set(re.findall(rf"\(0,{re.escape(jsx)}\.jsx\)\(({ident})\.Separator,", menu))
+    namespaces |= set(re.findall(rf"({ident})\.FlyoutSubmenuItem", menu))
+    if len(namespaces) != 1:
+        raise RuntimeError(f"could not identify the native menu namespace: {sorted(namespaces)}")
+    menu_namespace = namespaces.pop()
+    image_resolver = _match_once(
+        menu_body,
+        rf"({ident})\({ident}\?\.profile_picture_url\?\?null\)",
+        "the profile image resolver",
+    ).group(1)
+
+    # React Query's useQueryClient is not imported by the menu chunk; add it.
+    query_client_local = _match_once(
+        shared,
+        rf"({ident})=e=>\{{let t={ident}\.useContext\({ident}\);if\(e\)return e;"
+        r"if\(!t\)throw Error\(`No QueryClient set",
+        "React Query's client hook",
+    ).group(1)
+    query_client_export = _export_name(shared, query_client_local)
+
+    component = (PROJECT_ROOT / "ui" / "account-menu.js").read_text(encoding="utf-8")
+    component = component.replace("__CODEX_MUX_CONTROL_PORT__", str(CONTROL_PORT))
+    component = component.replace("__CODEX_MUX_CONTROL_TOKEN__", token)
+    component = replace_javascript_identifiers(
+        component,
+        {
+            "e7": jsx,
+            "kXc": react,
+            "Lo": scope_hook,
+            "Q": scope_key,
+            "BW": open_modal,
+            "QLs": usage_modal,
+            "_H": menu_item,
+            "S2": "CodexMuxUsageIcon",
+            "CH": menu_namespace,
+            "jLa": image_resolver,
+            "lt": "CodexMuxUseQueryClient",
+        },
+    )
+    menu = menu[:menu_start] + component + "\n" + menu[menu_start:]
+    # Added after the component so the offset above stays valid.
+    shared_name = shared_path.name
+    menu = _sub_once(
+        menu,
+        rf'import\{{(?=[^}}]*\}}from"\./{re.escape(shared_name)}")',
+        f"import{{{query_client_export} as CodexMuxUseQueryClient,",
+        "the menu chunk's shared import",
+    )
+    menu = _sub_once(
+        menu,
+        rf"usageItems:{ident}\}}\)",
+        f"usageItems:(0,{jsx}.jsx)(CodexMuxAccountMenu,{{}})}})",
+        "the native usage menu slot",
+    )
+    menu_path.write_text(menu, encoding="utf-8")
+
+    # The menu chunk is lazy, but its helpers pool usage for every surface.
+    # Load it at startup and let early requests wait for it.
+    initial = (
+        initial.rstrip()
+        + "\n;globalThis.__codexMuxReady=new Promise(e=>setTimeout(e,0))"
+        f'.then(()=>import("./{menu_path.name}")).catch(()=>{{}});\n'
+    )
+
+    # --- shared bundle: plugin scoping and pooled usage ---
+    plugin_rpc_literals = (
+        "sendRequest(`app/list`",
+        "sendRequest(`app/installed`",
+        "sendRequest(`app/read`",
+        "sendRequest(`mcpServer/oauth/login`",
+        "sendRequest(`mcpServerStatus/list`",
+    )
+    for literal in plugin_rpc_literals:
+        if literal not in shared and literal not in initial:
+            raise RuntimeError("could not verify the native Plugins request-to-RPC mapping")
+    shared = _sub_once(
+        shared,
+        r"async sendRequest\(e,t,n\)\{if\(this\.dispatchMessage==null\)throw Error\("
+        r"`AppServerRequestClient is missing a message dispatcher`\);"
+        r"return e===`config/read`\?this\.sendConfigReadRequest\(t,n\):"
+        r"this\.enqueueRequest\(e,t,",
+        "async sendRequest(e,t,n){if(this.dispatchMessage==null)throw Error("
+        "`AppServerRequestClient is missing a message dispatcher`);"
+        "t=globalThis.codexMuxScopePluginRequest?.(e,t)??t;"
+        "return e===`config/read`?this.sendConfigReadRequest(t,n):"
+        "this.enqueueRequest(e,t,",
+        "the native app-server request bridge",
+    )
+    shared = _sub_once(
+        shared,
+        rf"try\{{return ({ident})\(await ({ident})\.safeGet\(`/wham/usage`,"
+        r"(\{additionalHeaders:\{[^{}]*\},signal:t\})\)\)\}catch",
+        lambda m: (
+            f"try{{let r={m.group(1)}(await {m.group(2)}.safeGet(`/wham/usage`,"
+            f"{m.group(3)}));await globalThis.__codexMuxReady;"
+            "return(await globalThis.codexMuxFilterUsageStatus?.(r))??r}catch"
+        ),
+        "the native rate-limit status request",
+    )
+    shared = _sub_once(
+        shared,
+        rf"let (\w)=({ident})\(({ident})\((\w)\.usage\),(\w)\.getQueryData\((\w)\)\);",
+        lambda m: (
+            m.group(0)
+            + f"{m.group(1)}=globalThis.codexMuxFilterUsageStatusSync?.({m.group(1)})"
+            f"??{m.group(1)};"
+        ),
+        "the native usage stream snapshot",
+    )
+
+    # --- initial bundle: profile stats, reset credits, usage sheet hook ---
+    initial = _sub_once(
+        initial,
+        rf"async function ({ident})\(\)\{{let e=await ({ident})\.safeGet\(`/wham/profiles/me`\)",
+        lambda m: (
+            f"async function {m.group(1)}(){{await globalThis.__codexMuxReady;"
+            "let e=globalThis.codexMuxProfileData?await globalThis.codexMuxProfileData("
+            "globalThis.__codexMuxSelectedProfileAccountId??null):"
+            f"await {m.group(2)}.safeGet(`/wham/profiles/me`)"
+        ),
+        "the native profile stats request",
+    )
+    initial = _sub_once(
+        initial,
+        rf"function ({ident})\(\)\{{let e=\(0,{ident}\.c\)\(1\);({ident}\(\),{ident}\(null\));"
+        r"let t;return e\[0\]===Symbol\.for\(`react\.memo_cache_sentinel`\)\?"
+        rf"\(t=\{{queryKey:\[`rate-limit-reset-credits`\],queryFn:({ident}),select:({ident}),"
+        rf"refetchInterval:({ident})\.ONE_MINUTE,staleTime:\5\.FIVE_SECONDS\}},e\[0\]=t\):"
+        rf"t=e\[0\],({ident})\(t\)\}}",
+        lambda m: (
+            f"function {m.group(1)}(){{{m.group(2)};let e=window.__codexMuxResetAccountId;"
+            f"return {m.group(6)}({{queryKey:[`rate-limit-reset-credits`,e??`primary`],"
+            "queryFn:e&&globalThis.codexMuxRateLimitResets?"
+            f"()=>globalThis.codexMuxRateLimitResets(e):{m.group(3)},select:{m.group(4)},"
+            f"refetchInterval:{m.group(5)}.ONE_MINUTE,staleTime:{m.group(5)}.FIVE_SECONDS}})}}"
+        ),
+        "the native reset-credit query",
+    )
+    initial = _sub_once(
+        initial,
+        rf"function ({ident})\(\)\{{let e=\(0,{ident}\.c\)\(3\),t=({ident})\(\),n=({ident})\(\),r;"
+        rf"return e\[0\]!==n\|\|e\[1\]!==t\?\(r=\{{mutationFn:({ident}),onSuccess:\(e,r\)=>\{{"
+        r"let\{creditId:i\}=r,a=e\.code;if\(a===`reset`\|\|a===`already_redeemed`\)\{"
+        r"let n=e\.code===`reset`\?e\.credit\?\.id\?\?i:i;"
+        rf"t\.setQueryData\(\[`rate-limit-reset-credits`\],e=>({ident})\(e,a,n\)\)\}}"
+        r"Promise\.all\(\[n\(\[`rate-limit-status`\]\),n\(\[`rate-limit-reset-credits`\]\)\]\)\}\},"
+        rf"e\[0\]=n,e\[1\]=t,e\[2\]=r\):r=e\[2\],({ident})\(r\)\}}",
+        lambda m: (
+            f"function {m.group(1)}(){{let e={m.group(2)}(),t={m.group(3)}(),"
+            "n=window.__codexMuxResetAccountId,"
+            f"r=[`rate-limit-reset-credits`,n??`primary`];return {m.group(6)}({{"
+            "mutationFn:n&&globalThis.codexMuxConsumeRateLimitReset?"
+            f"i=>globalThis.codexMuxConsumeRateLimitReset(n,i):{m.group(4)},"
+            "onSuccess:(n,i)=>{let{creditId:a}=i,o=n.code;"
+            "if(o===`reset`||o===`already_redeemed`){let t=o===`reset`?"
+            f"n.credit?.id??a:a;e.setQueryData(r,e=>{m.group(5)}(e,o,t))}}"
+            "Promise.all([t([`rate-limit-status`]),t(r)])}})}"
+        ),
+        "the native reset-credit mutation",
+    )
+    initial = _sub_once(
+        initial,
+        r"defaultMessage:`You’re out of usage`",
+        "defaultMessage:`All connected subscriptions are depleted`",
+        "the native usage depletion alert",
+    )
+    initial_path.write_text(initial, encoding="utf-8")
+    shared_path.write_text(shared, encoding="utf-8")
+
+    # --- usage sheet chunk: per-subscription windows and picker ---
+    modal = patch_chunked_usage_state(modal)
+    modal = _sub_once(
+        modal,
+        rf"let ({ident})=({ident});if\(({ident})!=null\)\{{let e;return t\[7\]!==",
+        lambda m: (
+            f"let {m.group(1)}=window.__codexMuxSelectedUsageWindows??{m.group(2)};"
+            f"if({m.group(3)}!=null){{let e;return t[7]!=="
+        ),
+        "the native usage-window selection",
+    )
+    modal = _sub_once(
+        modal,
+        rf"let ({ident});t\[(\d+)\]===Symbol\.for\(`react\.memo_cache_sentinel`\)\?"
+        rf"\(\1=\(0,({ident})\.jsx\)\(({ident}),\{{children:"
+        r"(\(0,\3\.jsx\)\(" + ident + r",\{title:.{0,600}?"
+        r"description:`Heading for the Codex usage limit modal`\}\)\}\)\}\)\}\))"
+        r"\}\),t\[\2\]=\1\):\1=t\[\2\];",
+        lambda m: (
+            f"let {m.group(1)}=(0,{m.group(3)}.jsxs)({m.group(4)},{{children:["
+            f"{m.group(5)},window.__codexMuxResetAccountSelector??null]}});"
+        ),
+        "the native Usage sheet header",
+    )
+    modal_path.write_text(modal, encoding="utf-8")
+
+    # --- profile page: combined view with per-subscription avatars ---
+    profile_path = _asset_containing(
+        assets, "profile-*.js", "profile.nameFallback", "native Profile page bundle"
+    )
+    profile = profile_path.read_text(encoding="utf-8")
+    query_client = _match_once(
+        profile,
+        rf"({ident})\.getQueryData\({ident}\.queryKey\)\?\.profile_details\.username",
+        "the Profile page query client",
+    ).group(1)
+    profile = _sub_once(
+        profile,
+        r"avatar:\(0,\$\.jsxs\)\(\$\.Fragment,\{children:\[\(0,\$\.jsxs\)\(`div`,"
+        r"(\{\"aria-disabled\":" + ident + r",(?:(?!className:).){0,300})"
+        rf"className:({ident})\(`group relative flex rounded-full outline-none`,",
+        lambda m: (
+            "avatar:(0,$.jsxs)($.Fragment,{children:["
+            "globalThis.CodexMuxProfileAvatarStack?.({onSelect:()=>"
+            f"{query_client}.invalidateQueries({{queryKey:[`profile`]}})}})??null,"
+            f"(0,$.jsxs)(`div`,{m.group(1)}className:{m.group(2)}("
+            "globalThis.CodexMuxProfileAvatarStack?`hidden`:"
+            "`group relative flex rounded-full outline-none`,"
+        ),
+        "the native Profile avatar",
+    )
+    profile = _sub_once(
+        profile,
+        rf"(?<=[,;{{])({ident})=({ident})\?\?(\(0,\$\.jsx\)\({ident},\{{id:`profile\.nameFallback`,"
+        r"defaultMessage:`ChatGPT user`,description:`Fallback profile display name`\}\))",
+        lambda m: (
+            f"{m.group(1)}=globalThis.__codexMuxSelectedProfileAccountId?"
+            f"({m.group(2)}??{m.group(3)}):null"
+        ),
+        "the native Profile display name",
+    )
+    profile = _sub_once(
+        profile,
+        rf"(?<=[,;{{])({ident})=({ident})==null\?null:(?=\(0,\$\.jsxs\)\(\$\.Fragment,"
+        r"\{children:\[\(0,\$\.jsx\)\(" + ident + r",\{id:`profile\.username\.prefix`)",
+        lambda m: (
+            f"{m.group(1)}={m.group(2)}==null||"
+            "!globalThis.__codexMuxSelectedProfileAccountId?null:"
+        ),
+        "the native Profile username",
+    )
+    profile_path.write_text(profile, encoding="utf-8")
+
+    # --- Plugins settings: subscription picker for connections ---
+    plugin_path = _asset_containing(
+        assets,
+        "plugins-settings-*.js",
+        "plugins-settings.browseDirectory",
+        "native Plugins settings bundle",
+    )
+    plugins = plugin_path.read_text(encoding="utf-8")
+    plugins = _sub_once(
+        plugins,
+        rf"(\(0,{ident}\.jsx\)\({ident},\{{title:{ident},subtitle:{ident},"
+        rf"action:{ident},children:)({ident})\}}\)",
+        lambda m: f"{m.group(1)}[globalThis.CodexMuxPluginScope?.()??null,{m.group(2)}]}})",
+        "the native Plugins settings content",
+    )
+    plugin_path.write_text(plugins, encoding="utf-8")
+
+    # --- chat summary: the subscription that owns this chat ---
+    thread_path = _asset_containing(
+        assets,
+        "local-conversation-thread-*.js",
+        ",onForceShow:",
+        "local conversation renderer bundle",
+    )
+    thread = thread_path.read_text(encoding="utf-8")
+    summary = _match_once(
+        thread,
+        rf"function ({ident})\(e\)\{{let t=\(0,{ident}\.c\)\(\d+\),\{{isHidden:{ident},"
+        rf"onForceShow:[^}}]*\}}=e,{ident}={ident}!==void 0&&{ident},"
+        rf"({ident})=({ident})\(({ident})\),",
+        "the native thread summary component",
+    )
+    route_hook, route_atom = summary.group(3, 4)
+    summary_body = thread[summary.start() : summary.start() + 20_000]
+    activity = re.search(rf"\(0,({ident})\.jsx\)\(({ident})\.Activity,", summary_body)
+    if activity is None:
+        raise RuntimeError("could not find React in the thread summary")
+    thread_jsx, thread_react = activity.group(1, 2)
+    sections = set(re.findall(rf"({ident})\.Section,\{{sectionKey:", thread))
+    if len(sections) != 1:
+        raise RuntimeError(f"could not identify the thread summary sections: {sorted(sections)}")
+    thread_component = (PROJECT_ROOT / "ui" / "thread-subscription.js").read_text(
+        encoding="utf-8"
+    )
+    thread_component = thread_component.replace("__CODEX_MUX_CONTROL_PORT__", str(CONTROL_PORT))
+    thread_component = thread_component.replace("__CODEX_MUX_CONTROL_TOKEN__", token)
+    thread_component = replace_javascript_identifiers(
+        thread_component,
+        {
+            "$n": route_hook,
+            "sr": route_atom,
+            "TE": thread_react,
+            "zE": thread_jsx,
+            "K": sections.pop(),
+        },
+    )
+    list_pattern = (
+        rf"\(0,{re.escape(thread_jsx)}\.jsxs\)\({re.escape(thread_jsx)}\.Fragment,"
+        rf"\{{children:\[((?:{ident},){{4}}{ident})((?:,{ident}){{4}})\]\}}\)"
+    )
+    summary_end = summary.start() + len(summary_body)
+    head, tail = thread[: summary.start()], thread[summary.start() : summary_end]
+    tail = _sub_once(
+        tail,
+        list_pattern,
+        lambda m: (
+            f"(0,{thread_jsx}.jsxs)({thread_jsx}.Fragment,{{children:[{m.group(1)},"
+            f"(0,{thread_jsx}.jsx)(CodexMuxThreadSubscription,{{}}){m.group(2)}]}})"
+        ),
+        "the native thread summary section list",
+    )
+    thread = head + thread_component + "\n" + tail + thread[summary_end:]
+    thread_path.write_text(thread, encoding="utf-8")
+
+
+def _import_alias_source(bundle: str, alias: str) -> str:
+    """Return the exported name a chunk imported under `alias`."""
+    for names, _ in re.findall(r'import\{([^}]*)\}from"(\./[^"]+)"', bundle):
+        for part in names.split(","):
+            match = re.fullmatch(r"([\w$]+) as ([\w$]+)", part.strip())
+            if match and match.group(2) == alias:
+                return match.group(1)
+    raise RuntimeError(f"could not resolve the import behind {alias}")
+
+
+def single_asset(assets: Path, pattern: str, what: str) -> Path:
+    matches = list(assets.glob(pattern))
+    if len(matches) != 1:
+        raise RuntimeError(f"expected one {what}, found {len(matches)}")
+    return matches[0]
+
+
 def disable_updater_lifecycle(extracted: Path) -> None:
     """Keep every updater entry point (launch gate, menu, IPC) from starting Sparkle."""
     updater_anchor = (
@@ -1897,6 +2400,16 @@ def isolate_desktop_profile(extracted: Path, prelude: str) -> None:
         r"(?=(?:try\{)?let\{runMainAppStartup:)"
     )
     bootstrap, updater_replacements = updater_pattern.subn("", bootstrap, count=1)
+    if updater_replacements == 0:
+        # Build 12246 folds the call into the condition that picks the Windows
+        # runtime: `try{if(await n.initialize(),r&&a&&...,r||i){`.
+        comma_updater_pattern = re.compile(
+            r"(?<=let s=\{phase:`bootstrap-import-main`\};try\{if\()"
+            r"await [A-Za-z_$][\w$]*\.initialize\(\),"
+        )
+        bootstrap, updater_replacements = comma_updater_pattern.subn(
+            "", bootstrap, count=1
+        )
     if updater_replacements != 1:
         raise RuntimeError("could not disable updates in the copied ChatGPT app")
     bootstrap_path.write_text(bootstrap, encoding="utf-8")
@@ -1976,6 +2489,48 @@ def patch_desktop_profile(
     install_ui_test_bridge(extracted)
 
 
+def patch_electron_integrity_digest(app: Path, integrity: dict) -> None:
+    """Update Electron's enabled v1 plist digest before re-signing the framework.
+
+    Newer Electron authenticates ElectronAsarIntegrity itself against a slot
+    in __DATA_CONST,__asar_integrity. Hash the sorted path/algorithm/hash UTF-8
+    strings exactly as integrity_digest.mm does; keep validation enabled.
+    Older frameworks have no slot or leave it unused.
+    """
+    hasher = hashlib.sha256()
+    # NSString's literal ordering compares UTF-16 code units.
+    for key in sorted(integrity, key=lambda value: value.encode("utf-16-be")):
+        for value in (key, integrity[key]["algorithm"], integrity[key]["hash"]):
+            hasher.update(value.encode("utf-8"))
+    digest = hasher.digest()
+    sentinel = b"AGbevlPCksUGKNL8TSn7wGmJEuJsXb2A"
+    for framework in sorted((app / "Contents" / "Frameworks").glob("*.framework")):
+        binary = framework / framework.stem
+        if not binary.is_file():
+            continue
+        with binary.open("r+b") as handle:
+            if os.fstat(handle.fileno()).st_size == 0:
+                continue
+            with mmap.mmap(handle.fileno(), 0) as data:
+                offsets = []
+                start = 0
+                while (offset := data.find(sentinel, start)) != -1:
+                    start = offset + len(sentinel)
+                    if offset + 66 > len(data):
+                        raise RuntimeError(f"truncated Electron integrity digest slot: {binary}")
+                    used, version = data[offset + 32:offset + 34]
+                    if used == 0:
+                        continue
+                    if used != 1 or version != 1:
+                        raise RuntimeError(f"unsupported Electron integrity digest slot {used}/{version}: {binary}")
+                    offsets.append(offset + 34)
+                # Validate all architecture slots before modifying this binary.
+                for offset in offsets:
+                    data[offset:offset + 32] = digest
+                if offsets:
+                    data.flush()
+
+
 def patch_info_plist(
     app: Path,
     asar_path: Path,
@@ -2009,6 +2564,7 @@ def patch_info_plist(
     }
     with plist_path.open("wb") as handle:
         plistlib.dump(info, handle, fmt=plistlib.FMT_BINARY, sort_keys=False)
+    patch_electron_integrity_digest(app, info["ElectronAsarIntegrity"])
 
 
 def patch_app(
@@ -2131,10 +2687,15 @@ def patch_app(
             dirs_exist_ok=True,
         )
 
-        bundled_codex = resources / "codex"
-        real_codex = resources / "codex.real"
+        bundled_codex, codex_cli_bundle = bundled_codex_layout(resources)
+        real_codex = bundled_codex.with_name("codex.real")
         if real_codex.exists():
             raise RuntimeError("source app already contains codex.real")
+        if codex_cli_bundle is not None:
+            # The provisioning profile grants OpenAI's keychain group to the
+            # bundle's main executable; the re-signed copy has neither.
+            for profile in codex_cli_bundle.rglob("embedded.provisionprofile"):
+                profile.unlink()
         bundled_codex.rename(real_codex)
         shutil.copy2(proxy, bundled_codex)
         bundled_codex.chmod(0o755)

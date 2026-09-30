@@ -121,3 +121,16 @@ func TestAnUntrackedThreadIsNotClaimed(t *testing.T) {
 		t.Fatal("with no turn to replay the error must reach the client")
 	}
 }
+
+func TestCompletedNotificationClearsInflightTurn(t *testing.T) {
+	m := &Multiplexer{inflightTurns: make(map[string]protocol.Message)}
+	m.rememberInflightTurn(protocol.Message{Method: "turn/start", Params: json.RawMessage(`{"threadId":"t1"}`)})
+	// Completion carries threadId at the top level; thread/started uses thread.id.
+	m.forgetInflightTurn(threadIDFromNotification(json.RawMessage(`{"threadId":"t1","turn":{"id":"turn1","status":"completed"}}`)))
+	if m.hasInflightTurn("t1") {
+		t.Fatal("completed response still blocks switching subscriptions")
+	}
+	if id := threadIDFromNotification(json.RawMessage(`{"thread":{"id":"t2"}}`)); id != "t2" {
+		t.Fatal(id)
+	}
+}

@@ -7,6 +7,16 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Provisional ChatGPT build `12246` support: split renderer chunks, packaged
+  Codex CLI layout, and enabled Electron integrity-dictionary digest updates.
+  Signing, isolated launch and account/usage/profile/plugin screens verified;
+  fixes subscription selection through the lazy Usage sheet. Routing on three
+  accounts, depletion failover and history-preserving account moves verified.
+  Computer Use permission verification remains pending.
+- Account-local history transfer for newer paginated engines, including shutting
+  down a previously loaded target writer before replacing its stale history.
+- Finished turns now clear the active-response marker so manual account switching
+  works after a response completes.
 - Choose which subscription new chats use: **New chats use** in the profile
   menu (or click an account row) pins new chats to one subscription while it
   has usage, falling back to automatic routing when it is depleted, paused, or

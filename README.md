@@ -5,10 +5,14 @@ Maintained by [Mvnshi](https://github.com/Mvnshi), based on
 with community compatibility work and its original authorship preserved.
 See [branch status and credits](docs/MAINTAINED.md).
 
-Supports official macOS builds `6396` through `8109`. Build `8109` is
+Supports the recorded official macOS builds `6396` through `12246`. Build `8109` is
 provisional: it patches, signs, launches and loads connected accounts, but
 routing and failover have not been exercised on it. See
-[the 8109 port notes](docs/BUILD-8109-PORT.md). A Windows port exists, but no
+[the 8109 port notes](docs/BUILD-8109-PORT.md). Build `12246` patches, signs and
+launches, and passes account/usage/profile/plugin screens, routing on three
+accounts, failover and history-preserving account moves. Computer Use still
+requires permission verification. See
+[the 12246 port notes](docs/BUILD-12246-PORT.md). A Windows port exists, but no
 official Windows build has been exercised with it yet; see
 [the Windows port notes](docs/WINDOWS.md).
 
@@ -88,7 +92,7 @@ Codex Subscription Router currently targets:
 | --- | --- |
 | Platform: macOS | Apple silicon, tested against the builds below |
 | Platform: Windows | x64 and arm64, **provisional**: no official Windows build has been exercised yet; every anchor is checked at run time and `--allow-untested-source` is required until a build is recorded |
-| Official ChatGPT versions (macOS) | `26.803.61601` (build `6396`), `26.810.52044` (build `6662`), `26.901.22334` (build `7746`), `26.901.51231` (build `8109`) |
+| Official ChatGPT versions (macOS) | `26.803.61601` (build `6396`), `26.810.52044` (build `6662`), `26.901.22334` (build `7746`), `26.901.51231` (build `8109`), `26.928.20755` (build `12246`, provisional) |
 | Official ChatGPT versions (Windows) | none recorded yet |
 | Go | 1.26 or newer |
 | Node.js | 22.12 or newer |

@@ -12,6 +12,12 @@ stops instead of applying a partial patch.
 | `26.810.52044` | `6662` | `6e7e8791b8bf69a586ff994721fff518af391d9efdc66cd2e620dd2a4aedc90f` |
 | `26.901.22334` | `7746` | `405f0e1600fc63851abe4c763ec0546f56c32da312c2c2745e2b997c579ce0d0` |
 | `26.901.51231` | `8109` | `64fc2f27d2dddfa968acfacbe5e4e0328071bdc406351ff4a7d18f0b4692c83d` |
+| `26.928.20755` | `12246` | `2301fba40bd8fa237ccdb1369363e1deefaf27953da2d767d428225d5e9eedee` |
+
+Build `12246` is provisional: patching, signing, isolated launch and account,
+usage, profile and plugin screens, routing on three accounts, failover and
+history-preserving account moves passed. Computer Use permissions remain pending. See
+[BUILD-12246-PORT.md](BUILD-12246-PORT.md) for the integrity fix and test limits.
 
 | Component | Tested value |
 | --- | --- |

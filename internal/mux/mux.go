@@ -57,6 +57,9 @@ type Multiplexer struct {
 	store          *state.Store
 	output         io.Writer
 
+	lifecycleMu       sync.Mutex
+	internalLifecycle map[string]bool
+
 	childrenMu sync.RWMutex
 	children   map[string]*backend.Child
 	inbound    chan backend.Inbound
@@ -413,7 +416,11 @@ func (m *Multiplexer) resumeThreadOnAccount(ctx context.Context, threadID, sourc
 		"model":         nil,
 		"modelProvider": readResult.Thread.ModelProvider,
 	})
-	if _, err := target.Request(ctx, "thread/resume", resumeParams); err != nil {
+	targetAccount, ok := m.store.Account(targetAccountID)
+	if !ok {
+		return errors.New("target subscription is unavailable")
+	}
+	if err := resumeTransferredThread(ctx, threadID, readResult.Thread.Path, targetAccount.CodexHome, resumeParams, target.Request, func(ids []string) func() { return m.hideTransferLifecycle(targetAccountID, ids) }); err != nil {
 		return fmt.Errorf("resume existing chat: %w", err)
 	}
 	return nil
@@ -449,6 +456,9 @@ func (m *Multiplexer) inboundLoop(ctx context.Context) {
 
 func (m *Multiplexer) handleInbound(inbound backend.Inbound) {
 	message := inbound.Message
+	if m.consumeTransferLifecycle(inbound.AccountID, message) {
+		return
+	}
 	traceInboundMessage(inbound.AccountID, message.Method, inbound.Raw)
 	if message.Method == "" && len(message.ID) > 0 {
 		key := protocol.RequestIDKey(message.ID)
@@ -719,6 +729,9 @@ func threadIDFromResult(result json.RawMessage) string {
 }
 
 func threadIDFromNotification(params json.RawMessage) string {
+	if id := threadIDFromParams(params); id != "" {
+		return id
+	}
 	return threadIDFromResult(params)
 }
 
@@ -841,4 +854,41 @@ func (m *Multiplexer) MoveThread(ctx context.Context, threadID, targetAccountID 
 		Data:      map[string]any{"threadId": threadID, "previousAccountId": ownerID},
 	})
 	return m.accountSnapshot(ctx, targetAccountID)
+}
+
+// Internal archive/unarchive is a writer refresh, not a visible user action.
+func (m *Multiplexer) hideTransferLifecycle(accountID string, ids []string) func() {
+	m.lifecycleMu.Lock()
+	if m.internalLifecycle == nil {
+		m.internalLifecycle = map[string]bool{}
+	}
+	var keys []string
+	for _, id := range ids {
+		for _, method := range []string{"thread/archived", "thread/unarchived"} {
+			key := accountID + "/" + method + "/" + id
+			m.internalLifecycle[key] = true
+			keys = append(keys, key)
+		}
+	}
+	m.lifecycleMu.Unlock()
+	return func() {
+		m.lifecycleMu.Lock()
+		defer m.lifecycleMu.Unlock()
+		for _, key := range keys {
+			delete(m.internalLifecycle, key)
+		}
+	}
+}
+func (m *Multiplexer) consumeTransferLifecycle(accountID string, message protocol.Message) bool {
+	if message.Method != "thread/archived" && message.Method != "thread/unarchived" {
+		return false
+	}
+	key := accountID + "/" + message.Method + "/" + threadIDFromNotification(message.Params)
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	if !m.internalLifecycle[key] {
+		return false
+	}
+	delete(m.internalLifecycle, key)
+	return true
 }

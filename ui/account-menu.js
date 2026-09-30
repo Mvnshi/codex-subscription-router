@@ -184,9 +184,22 @@ async function codexMuxFilterUsageStatus(status) {
   let accounts;
   try {
     accounts = (await codexMuxRequest("/accounts")).accounts || [];
+    codexMuxRememberAccounts(accounts);
   } catch {
     return status;
   }
+  return codexMuxPoolUsageStatus(status, accounts);
+}
+
+// Streamed usage snapshots are applied synchronously, so they are pooled with
+// the last known accounts instead of waiting for a fresh list.
+function codexMuxFilterUsageStatusSync(status) {
+  if (status == null || typeof status !== "object") return status;
+  const accounts = codexMuxCachedAccounts();
+  return accounts.length > 0 ? codexMuxPoolUsageStatus(status, accounts) : status;
+}
+
+function codexMuxPoolUsageStatus(status, accounts) {
   const pool = accounts.filter(codexMuxIsUsable);
   if (pool.length < 2) return status;
   const poolHasCapacity = pool.some((account) => {
@@ -961,6 +974,22 @@ function CodexMuxAccountMenu() {
   return (0, e7.jsx)(e7.Fragment, { children: rows });
 }
 
+function CodexMuxUsageIcon(props) {
+  return (0, e7.jsx)("svg", {
+    viewBox: "0 0 20 20",
+    fill: "none",
+    "aria-hidden": true,
+    ...props,
+    children: (0, e7.jsx)("path", {
+      d: "M3.75 13.25a6.25 6.25 0 1 1 12.5 0M10 13.25l3-4.5",
+      stroke: "currentColor",
+      strokeWidth: 1.5,
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+    }),
+  });
+}
+
 function CodexMuxCheckIcon(props) {
   return (0, e7.jsx)("svg", {
     viewBox: "0 0 20 20",
@@ -1331,6 +1360,8 @@ function CodexMuxPluginScope() {
 globalThis.CodexMuxAccountAvatar = CodexMuxAccountAvatar;
 globalThis.codexMuxScopePluginRequest = codexMuxScopePluginRequest;
 globalThis.codexMuxFilterUsageStatus = codexMuxFilterUsageStatus;
+globalThis.codexMuxFilterUsageStatusSync = codexMuxFilterUsageStatusSync;
+globalThis.CodexMuxUseResetAccountState = CodexMuxUseResetAccountState;
 globalThis.codexMuxProfileData = codexMuxProfileData;
 globalThis.codexMuxRateLimitResets = codexMuxRateLimitResets;
 globalThis.codexMuxConsumeRateLimitReset = codexMuxConsumeRateLimitReset;

@@ -11,6 +11,72 @@ from unittest import mock
 import patch_app
 
 
+class ElectronIntegrityDictionaryTests(unittest.TestCase):
+    SENTINEL = b"AGbevlPCksUGKNL8TSn7wGmJEuJsXb2A"
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.app = Path(self.temporary.name) / "Router.app"
+        self.framework = self.app / "Contents/Frameworks/Codex Framework.framework/Codex Framework"
+        self.framework.parent.mkdir(parents=True)
+        self.integrity = {"Resources/app.asar": {"algorithm": "SHA256", "hash": "ab" * 32}}
+
+    def slot(self, used=1, version=1):
+        return self.SENTINEL + bytes((used, version)) + b"x" * 32
+
+    def test_updates_enabled_digest_without_disabling_validation(self):
+        self.framework.write_bytes(b"prefix" + self.slot() + b"suffix")
+        patch_app.patch_electron_integrity_digest(self.app, self.integrity)
+        expected = hashlib.sha256(("Resources/app.asarSHA256" + "ab" * 32).encode()).digest()
+        self.assertEqual(self.framework.read_bytes(), b"prefix" + self.SENTINEL + b"\x01\x01" + expected + b"suffix")
+
+    def test_old_framework_without_slot_and_unused_slot_are_unchanged(self):
+        for data in (b"old framework", self.slot(0, 0)):
+            with self.subTest(data=data):
+                self.framework.write_bytes(data)
+                patch_app.patch_electron_integrity_digest(self.app, self.integrity)
+                self.assertEqual(self.framework.read_bytes(), data)
+
+    def test_updates_every_architecture_and_sorts_paths(self):
+        self.framework.write_bytes(self.slot() + b"padding" + self.slot())
+        integrity = {"Resources/z.asar": {"algorithm": "SHA256", "hash": "cd" * 32}, **self.integrity}
+        patch_app.patch_electron_integrity_digest(self.app, integrity)
+        expected = hashlib.sha256(("Resources/app.asarSHA256" + "ab" * 32 + "Resources/z.asarSHA256" + "cd" * 32).encode()).digest()
+        self.assertEqual(self.framework.read_bytes().count(expected), 2)
+
+    def test_unknown_or_truncated_slot_fails_before_mutating_framework(self):
+        for invalid in (self.slot(version=2), self.SENTINEL + b"\x01\x01"):
+            data = self.slot() + invalid
+            with self.subTest(invalid=invalid):
+                self.framework.write_bytes(data)
+                with self.assertRaises(RuntimeError):
+                    patch_app.patch_electron_integrity_digest(self.app, self.integrity)
+                self.assertEqual(self.framework.read_bytes(), data)
+
+
+class ChunkedUsageStateTests(unittest.TestCase):
+    MODAL = (
+        "function Et(e){let t=(0,Dt.c)(19);let b=y,x;return "
+        "t[12]!==r||t[13]!==d||t[14]!==v||t[15]!==b||t[16]!==i||t[17]!==g?"
+        "(x=(0,kt.jsx)(xt,{defaultResetCreditsOpen:r,errorMessage:d,"
+        "initialAvailableCount:i,isResetting:g,onClose:v,onResetCredit:b}),"
+        "t[12]=r,t[13]=d,t[14]=v,t[15]=b,t[16]=i,t[17]=g,t[18]=x):x=t[18],x}"
+        "export{Et as RateLimitResetModal};"
+    )
+
+    def test_selection_belongs_to_loaded_modal_and_invalidates_child(self):
+        patched = patch_app.patch_chunked_usage_state(self.MODAL)
+        self.assertIn("function Et(e){globalThis.CodexMuxUseResetAccountState();", patched)
+        self.assertIn("window.__codexMuxResetAccountId??`primary`", patched)
+        self.assertNotIn("x=t[18]", patched)
+        self.assertIn("onResetCredit:b", patched)
+
+    def test_changed_native_component_is_rejected(self):
+        with self.assertRaises(RuntimeError):
+            patch_app.patch_chunked_usage_state(self.MODAL.replace("onResetCredit:b", "newResetHandler:b"))
+
+
 class SigningTeamTests(unittest.TestCase):
     def resolve(self, identity, metadata=("true", "TEAMID5678")):
         with mock.patch.object(patch_app.shutil, "copyfile") as copy, \

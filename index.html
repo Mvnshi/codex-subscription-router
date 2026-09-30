@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#5264eb">
+  <meta name="description" content="All your ChatGPT subscriptions. One desktop app. Codex Subscription Router is a free, open-source tool for account routing, conversation continuity, and pooled usage.">
+  <meta property="og:title" content="Codex Subscription Router — More accounts. One flow.">
+  <meta property="og:description" content="A free, open-source desktop router for your ChatGPT subscriptions. Maintained by Munshi.">
+  <meta property="og:type" content="website">
+  <title>Codex Subscription Router — More accounts. One flow.</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='12' fill='%235264eb'/%3E%3Cpath d='M11 12v16m0-8h11m0 0 7-8m-7 8 7 8' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <svg class="svg-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="icon-route" viewBox="0 0 24 24"><path d="M5 4v16M5 12h8m0 0 6-7m-6 7 6 7"/></symbol>
+    <symbol id="icon-code" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-2-15-4 18"/></symbol>
+    <symbol id="icon-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></symbol>
+    <symbol id="icon-chat" viewBox="0 0 24 24"><path d="M20 14a4 4 0 0 1-4 4H9l-5 4V6a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4zM8 8h8m-8 4h5"/></symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4 10-10"/></symbol>
+    <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V3H3v13h5"/></symbol>
+    <symbol id="icon-coffee" viewBox="0 0 24 24"><path d="M4 8h13v8a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4zm13 1h1a3 3 0 0 1 0 6h-1M7 2v2m5-2v2M2 22h18"/></symbol>
+    <symbol id="icon-settings" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></symbol>
+    <symbol id="icon-github" viewBox="0 0 24 24"><path d="M9 19c-4 1-4-2-6-2m12 5v-4c0-1-.3-2-1-2 4-.5 7-2 7-6 0-2-1-3-2-4 .2-1 0-3-1-4-2 0-3 1-4 2a12 12 0 0 0-5 0C8 3 6 2 4 2c-1 1-1 3-1 4-1 1-2 2-2 4 0 4 3 5.5 7 6-.7.5-1 1-1 2v4"/></symbol>
+  </svg>
+  <header class="header">
+    <nav class="nav wrap" aria-label="Main navigation">
+      <a class="brand" href="#" aria-label="Codex Subscription Router home"><span class="brand-mark"><svg><use href="#icon-route"/></svg></span><span>router<span class="brand-dot">.</span></span></a>
+      <div class="nav-links"><a href="#features">Why Router</a><a href="#how-it-works">How it works</a><a href="#faq">FAQ</a></div>
+      <div class="nav-actions"><a class="github-nav" href="https://github.com/Mvnshi/codex-subscription-router" aria-label="View source on GitHub"><svg class="icon"><use href="#icon-github"/></svg><span>GitHub</span></a><a class="button button-small" href="#install">Get Router</a></div>
+    </nav>
+  </header>
+  <main id="main">
+    <section class="hero">
+      <div class="hero-grid wrap">
+        <div class="hero-copy">
+          <a class="release-pill" href="https://github.com/Mvnshi/codex-subscription-router/blob/main/docs/BUILD-12246-PORT.md"><span class="pill-tag">LATEST</span> macOS build 12246 support</a>
+          <h1>More accounts.<br>One <span class="flow-word">flow<svg viewBox="0 0 210 18" aria-hidden="true"><path d="M3 12c55-12 126-13 202-5"/></svg></span>.</h1>
+          <p class="hero-description">All your ChatGPT subscriptions in one desktop app. Put available usage to work, and keep your conversations moving.</p>
+          <div class="hero-buttons"><a class="button" href="#install">Get Router for free</a><a class="button button-light" href="#how-it-works">See how it works</a></div>
+          <p class="hero-note"><svg class="icon"><use href="#icon-check"/></svg> Free &amp; open source <span>·</span> Runs on your computer</p>
+        </div>
+        <div class="product-demo" id="demo" aria-label="Interactive routing demonstration">
+          <div class="demo-orbit orbit-one" aria-hidden="true"></div><div class="demo-orbit orbit-two" aria-hidden="true"></div>
+          <div class="demo-heading"><span class="demo-label">ONE APP. YOUR ACCOUNTS.</span><span class="demo-sample">Illustrative demo</span></div>
+          <div class="app-window">
+            <div class="app-titlebar"><div class="window-dots" aria-hidden="true"><i></i><i></i><i></i></div><span>Codex Subscription Router</span><svg class="icon"><use href="#icon-settings"/></svg></div>
+            <div class="app-body">
+              <aside class="app-sidebar" aria-hidden="true"><div class="sidebar-compose">+</div><span class="sidebar-line"></span><span class="sidebar-line short"></span><span class="sidebar-line"></span><span class="sidebar-line short"></span><span class="sidebar-avatar">M</span></aside>
+              <div class="app-chat"><div class="chat-top"><span>Something worth building</span><span id="chat-owner" class="owner-chip">Automatic</span></div><div class="chat-content"><span class="mini-route"><svg class="icon"><use href="#icon-route"/></svg></span><h2 id="demo-title">Keep making things.</h2><p id="demo-message" role="status" aria-live="polite">Start a chat. See which subscription picks it up.</p></div><div class="demo-controls"><button class="demo-send" id="start-chat">Start a chat <svg class="icon"><use href="#icon-chat"/></svg></button><button id="simulate-limit" class="demo-limit" disabled>Simulate limit</button></div></div>
+            </div>
+          </div>
+          <div class="route-connector" aria-hidden="true"><span class="connector-caption">AVAILABLE USAGE</span><svg viewBox="0 0 480 48" preserveAspectRatio="none"><path d="M240 0v18M80 48V30q0-12 12-12h296q12 0 12 12v18M240 18v30"/></svg></div>
+          <div class="demo-accounts">
+            <div class="demo-account" data-account="0"><div class="account-head"><span class="avatar avatar-peach">M</span><span>Primary<small>Plus</small></span><span class="account-selected" aria-hidden="true">✓</span></div><div class="account-meter"><span style="width:22%"></span></div><p><b class="account-remaining">22%</b> <span class="account-status">left</span></p></div>
+            <div class="demo-account" data-account="1"><div class="account-head"><span class="avatar avatar-violet">S2</span><span>Account 2<small>Pro</small></span><span class="account-selected" aria-hidden="true">✓</span></div><div class="account-meter"><span style="width:74%"></span></div><p><b class="account-remaining">74%</b> <span class="account-status">left</span></p></div>
+            <div class="demo-account" data-account="2"><div class="account-head"><span class="avatar avatar-mint">S3</span><span>Account 3<small>Plus</small></span><span class="account-selected" aria-hidden="true">✓</span></div><div class="account-meter"><span style="width:45%"></span></div><p><b class="account-remaining">45%</b> <span class="account-status">left</span></p></div>
+          </div>
+          <div class="demo-footnote"><span>Example data. No accounts connected.</span><button id="reset-demo">Reset demo</button></div>
+        </div>
+      </div>
+      <div class="trust-strip wrap"><span>YOUR SUBSCRIPTIONS, WORKING TOGETHER</span><div><svg class="icon"><use href="#icon-route"/></svg> Usage-aware routing</div><div><svg class="icon"><use href="#icon-chat"/></svg> Conversation continuity</div><div><svg class="icon"><use href="#icon-lock"/></svg> Local account state</div></div>
+    </section>
+    <section class="section wrap" id="features">
+      <div class="section-intro"><p class="eyebrow">LESS ACCOUNT JUGGLING</p><h2>Your work has momentum.<br>Your tools should keep up.</h2><p>One place for your accounts, their usage, and the chat you’re already in.</p></div>
+      <div class="features-grid">
+        <article class="feature-card feature-wide"><div><span class="feature-icon blue"><svg class="icon"><use href="#icon-route"/></svg></span><h3>The right account,<br>for the next chat.</h3><p>Router weighs weekly quota, approaching reset times, and short-window usage when choosing where a new chat starts.</p><a class="text-link" href="https://github.com/Mvnshi/codex-subscription-router/blob/main/docs/ARCHITECTURE.md">Explore the routing logic</a></div><div class="routing-visual" aria-hidden="true"><div class="mini-chat">New chat</div><div class="routing-lines"></div><div class="routing-target"><span class="avatar avatar-violet">S2</span><div>Account 2<small>Available for your next idea</small></div><svg class="icon"><use href="#icon-check"/></svg></div><div class="routing-alt"><span class="avatar avatar-peach">M</span>Primary<span>At limit</span></div></div></article>
+        <article class="feature-card"><span class="feature-icon mint"><svg class="icon"><use href="#icon-chat"/></svg></span><h3>Keep the conversation.</h3><p>Follow-ups stay with the same account. If it runs out, Router can continue the chat on another subscription with usage.</p><div class="continuity-art" aria-hidden="true"><span class="avatar avatar-violet">S2</span><span class="continuity-line"><i></i><i></i><i></i></span><span class="avatar avatar-mint">S3</span><span class="continuity-caption">Same thread. More room.</span></div></article>
+        <article class="feature-card"><span class="feature-icon peach"><svg class="icon"><use href="#icon-settings"/></svg></span><h3>You make the calls.</h3><p>Pin new chats to an account, inspect each plan, or see usage together. Reset credits ask for confirmation by default.</p><div class="reset-preview"><span>Usage resets</span><span class="ask-chip">✓ Ask me</span></div></article>
+        <article class="feature-card feature-local"><span class="feature-icon violet"><svg class="icon"><use href="#icon-lock"/></svg></span><h3>Your accounts stay local.</h3><p>Account state lives on your computer. Router builds an independent copy of the app and keeps the official installation intact.</p><a class="text-link" href="https://github.com/Mvnshi/codex-subscription-router/blob/main/docs/SECURITY-MODEL.md">Read the security model</a></article>
+      </div>
+    </section>
+    <section class="how-section" id="how-it-works"><div class="wrap how-layout"><div><p class="eyebrow">A SMALL CHANGE TO YOUR WORKFLOW</p><h2>Connect once.<br>Keep going.</h2><p class="section-description">Your existing subscriptions, brought together in a separate desktop app.</p><a class="button button-light" href="#demo">Try the demo</a></div><ol class="steps"><li><span class="step-number">1</span><div><h3>Build your local app</h3><p>The installer creates an independent router app from your official ChatGPT installation.</p></div></li><li><span class="step-number">2</span><div><h3>Connect your subscriptions</h3><p>Sign in to each account from the account menu. Each keeps its own identity, usage, and reset credits.</p></div></li><li><span class="step-number">3</span><div><h3>Start chatting</h3><p>Router chooses an account for new chats. Prefer one yourself? Pin it from the menu.</p></div></li></ol></div></section>
+    <section class="section wrap install-section" id="install">
+      <div class="section-intro"><p class="eyebrow">FREE. OPEN SOURCE. YOURS.</p><h2>A little setup.<br>A lot less switching.</h2><p>No Router subscription. Use the ChatGPT plans you already pay for.</p></div>
+      <div class="install-card"><div class="install-card-heading"><div class="platform-tabs" role="tablist" aria-label="Install platform"><button id="tab-mac" role="tab" aria-selected="true" aria-controls="panel-mac" tabindex="0">macOS</button><button id="tab-windows" role="tab" aria-selected="false" aria-controls="panel-windows" tabindex="-1">Windows <span>Provisional</span></button></div><span class="source-badge"><svg class="icon"><use href="#icon-code"/></svg> Built from source</span></div>
+        <div id="panel-mac" role="tabpanel" aria-labelledby="tab-mac" class="install-panel"><div class="install-summary"><h3>Made for your Mac.</h3><span class="platform-badge">Apple silicon</span></div><p>Run the installer in Terminal after checking the requirements below. It builds, signs, and launches your local copy.</p><div class="command-box"><code id="mac-command">curl -fsSL https://raw.githubusercontent.com/Mvnshi/codex-subscription-router/main/install.sh | /bin/bash</code><button class="copy-button" data-copy="mac-command" aria-label="Copy macOS install command"><svg class="icon"><use href="#icon-copy"/></svg><span>Copy</span></button></div><p class="requirements-label">Before you install</p><ul class="requirements"><li>Official ChatGPT app installed</li><li>Xcode Command Line Tools</li><li>Go 1.26+, Node.js 22.12+, npm &amp; Python 3</li><li>Apple Development or Developer ID signing identity</li></ul><div class="install-links"><a href="https://github.com/Mvnshi/codex-subscription-router#requirements">Full requirements &amp; setup</a><a href="https://github.com/Mvnshi/codex-subscription-router/blob/main/install.sh">Review installer source</a></div></div>
+        <div id="panel-windows" role="tabpanel" aria-labelledby="tab-windows" class="install-panel" hidden><div class="install-summary"><h3>Windows is still being verified.</h3><span class="platform-badge provisional-badge">Provisional</span></div><p>The source port targets x64 and ARM64. No official Windows build has passed live validation yet; the installer requires an explicit untested-build override.</p><div class="command-box"><code id="windows-command">irm https://raw.githubusercontent.com/Mvnshi/codex-subscription-router/main/install.ps1 | iex</code><button class="copy-button" data-copy="windows-command" aria-label="Copy Windows install command"><svg class="icon"><use href="#icon-copy"/></svg><span>Copy</span></button></div><p class="requirements-label">Before you try the port</p><ul class="requirements"><li>Official per-user desktop installation</li><li>Go 1.26+, Node.js 22.12+ &amp; npm</li><li>Python 3.11+ and Git</li><li>Read the port notes before opting in</li></ul><div class="install-links"><a href="https://github.com/Mvnshi/codex-subscription-router/blob/main/docs/WINDOWS.md">Windows port notes</a><a href="https://github.com/Mvnshi/codex-subscription-router#install-on-windows">Installation &amp; override instructions</a></div></div>
+        <div class="install-footer"><svg class="icon"><use href="#icon-lock"/></svg><p>The official app stays intact. Existing router state is preserved, with a recoverable backup when updating.</p></div>
+      </div>
+      <p class="compatibility-note">Version-sensitive by design. <a href="https://github.com/Mvnshi/codex-subscription-router/blob/main/docs/COMPATIBILITY.md">Check compatible builds and test coverage</a> before installing.</p>
+      <p id="copy-status" class="sr-only" role="status" aria-live="polite"></p>
+    </section>
+    <section class="section wrap faq-section" id="faq"><div class="faq-intro"><p class="eyebrow">GOOD QUESTIONS</p><h2>A few things<br>to know.</h2><p>More detail lives in the <a href="https://github.com/Mvnshi/codex-subscription-router#readme">documentation</a>.</p></div><div class="faq-list">
+      <details><summary>Is Router actually free?<span aria-hidden="true">+</span></summary><p>Yes. The router is free and open source under the MIT license. It does not include a ChatGPT subscription; you connect plans you already have.</p></details>
+      <details><summary>Does it give me unlimited usage?<span aria-hidden="true">+</span></summary><p>No. Each subscription keeps its own limits. Router helps use available quota across your connected accounts. When all accounts are depleted, it shows a combined limit alert.</p></details>
+      <details><summary>Will it use my reset credits automatically?<span aria-hidden="true">+</span></summary><p>By default, no. “Ask me” requires confirmation before you spend a reset. You can opt into “Use automatically” from the account menu; ordinary account failover comes first. Credits belong to their account and are never transferred.</p></details>
+      <details><summary>Is this an official OpenAI app?<span aria-hidden="true">+</span></summary><p>No. This is an independent community project, unaffiliated with OpenAI. It builds a separate, locally patched desktop app from your existing official installation. Review the source and the terms governing your subscriptions.</p></details>
+      <details><summary>What happens when the official app updates?<span aria-hidden="true">+</span></summary><p>Router is tied to known desktop builds. The patcher checks the official app’s version and structure and stops if they don’t match. Compatibility updates are maintained in the public repository; check the notes before rebuilding.</p></details>
+    </div></section>
+    <section class="maintainer-section wrap"><div class="maintainer-copy"><span class="maintainer-kicker"><svg class="icon"><use href="#icon-coffee"/></svg> A COMMUNITY PROJECT</span><h2>Kept moving<br>by a real human.</h2><p>I maintain this fork, fix compatibility as the desktop app changes, and keep the updates open source.</p><a class="button button-white" href="https://munshi.nyc">Check out my personal site</a></div><div class="maintainer-signature" aria-label="Maintained by Munshi"><span class="signature-monogram">m.</span><span>Maintained by <strong>Munshi</strong></span><a href="https://github.com/Mvnshi/codex-subscription-router/blob/main/CHANGELOG.md">See what’s new</a></div></section>
+  </main>
+  <footer class="footer wrap"><div class="footer-top"><a class="brand" href="#"><span class="brand-mark"><svg><use href="#icon-route"/></svg></span><span>router<span class="brand-dot">.</span></span></a><p>More accounts. One flow.</p><div><a href="https://github.com/Mvnshi/codex-subscription-router">GitHub</a><a href="https://github.com/Mvnshi/codex-subscription-router#readme">Docs</a><a href="https://munshi.nyc">munshi.nyc</a></div></div><div class="footer-bottom"><p>Codex Subscription Router · Free &amp; open source</p><p>Maintained fork of <a href="https://github.com/b-nnett/codex-subscription-router">b-nnett’s original project</a>. Unaffiliated with OpenAI.</p></div></footer>
+</body>
+</html>

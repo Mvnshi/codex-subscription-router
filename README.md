@@ -18,3 +18,12 @@ Edit `index.html`, `styles.css`, and `app.js` directly. Keep all assets relative
 the same page works at the repository's GitHub Pages subpath and on other static
 hosts. Sites preview source is maintained in the workspace's `router-site` checkout;
 when updating it, sync these public files into that checkout's `dist/` directory.
+
+## Hosting status
+
+The initial Sites preview is owner-private at
+https://codex-subscription-router.brevangblminor.chatgpt.site.
+The public GitHub Pages target is https://mvnshi.github.io/codex-subscription-router/.
+Its initial deployment was blocked by a GitHub account billing lock on
+2026-09-30. Once that account restriction is cleared, rerun the Website workflow;
+no source changes are required.

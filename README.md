@@ -3,6 +3,9 @@
 Maintained by [Mvnshi](https://github.com/Mvnshi), based on
 [b-nnett's original project](https://github.com/b-nnett/codex-subscription-router),
 with community compatibility work and its original authorship preserved.
+
+A free, open-source ChatGPT subscription router for multiple accounts: balance
+usage, keep conversations moving, and manage subscriptions in one local desktop app.
 See [branch status and credits](docs/MAINTAINED.md).
 
 [Visit the website](https://mvnshi.github.io/codex-subscription-router/) ·

@@ -54,7 +54,7 @@ limitButton.addEventListener("click", () => {
 document.getElementById("reset-demo").addEventListener("click", () => {
   owner = null;
   demoQuotas.splice(0, demoQuotas.length, 22, 74, 45);
-  title.textContent = "Keep making things.";
+  title.textContent = "What will you build next?";
   message.textContent = "Start a chat. See which subscription picks it up.";
   startButton.firstChild.textContent = "Start a chat ";
   startButton.disabled = false;

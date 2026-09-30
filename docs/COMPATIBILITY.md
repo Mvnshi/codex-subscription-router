@@ -16,7 +16,9 @@ stops instead of applying a partial patch.
 
 Build `12246` is provisional: patching, signing, isolated launch and account,
 usage, profile and plugin screens, routing on three accounts, failover and
-history-preserving account moves passed. Computer Use permissions remain pending. See
+history-preserving account moves, native desktop clicks and keyboard input,
+and real reset redemption through the account API passed. The native Use reset
+button flow remains untested because Computer Use protects its host app. See
 [BUILD-12246-PORT.md](BUILD-12246-PORT.md) for the integrity fix and test limits.
 
 | Component | Tested value |

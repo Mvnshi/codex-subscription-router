@@ -10,8 +10,8 @@ provisional: it patches, signs, launches and loads connected accounts, but
 routing and failover have not been exercised on it. See
 [the 8109 port notes](docs/BUILD-8109-PORT.md). Build `12246` patches, signs and
 launches, and passes account/usage/profile/plugin screens, routing on three
-accounts, failover and history-preserving account moves. Computer Use still
-requires permission verification. See
+accounts, failover and history-preserving account moves. Native desktop clicks,
+keyboard input and real reset redemption through the account API also passed. See
 [the 12246 port notes](docs/BUILD-12246-PORT.md). A Windows port exists, but no
 official Windows build has been exercised with it yet; see
 [the Windows port notes](docs/WINDOWS.md).

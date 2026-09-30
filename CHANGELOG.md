@@ -17,7 +17,8 @@ this project uses [Semantic Versioning](https://semver.org/).
   Signing, isolated launch and account/usage/profile/plugin screens verified;
   fixes subscription selection through the lazy Usage sheet. Routing on three
   accounts, depletion failover and history-preserving account moves verified.
-  Computer Use permission verification remains pending.
+  Native desktop clicks and keyboard input and real reset redemption through
+  the account API verified; the native redemption-button flow remains untested.
 - Account-local history transfer for newer paginated engines, including shutting
   down a previously loaded target writer before replacing its stale history.
 - Finished turns now clear the active-response marker so manual account switching

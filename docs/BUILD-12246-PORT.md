@@ -92,12 +92,29 @@ when all subscriptions are depleted. Only test quota previews were changed;
 the preview was cleared and the smoke-test chats archived afterward. The
 installed router's preferred account and existing chat assignments were kept.
 
-No real resets were redeemed. Actual reset redemption and desktop Computer Use
-remain unverified: macOS Accessibility and Screen Recording approval is still
-pending. These limits keep the build provisional despite the passing routing
-and screen checks.
+The initial routing and screen checks did not redeem real resets. Desktop
+Computer Use initially waited on macOS Accessibility and Screen Recording
+approval. The subsequent live verification is recorded below.
 
 The reset-count follow-up was checked against live read-only responses: the
 picker showed 3, 1 and 2 resets. Selecting Subscription 2 changed the native
 sheet to 1 available, matching its picker row. Pending counts now show loading
 and settle independently; native and picker queries share pending requests.
+
+## Desktop control and real reset verification (2026-09-30)
+
+With permissions available, the installed router Computer Use helper read
+Finder's accessibility tree and screenshot, opened Calculator, clicked its 2
+button, entered +2 and Return with native keyboard commands, and read and
+captured the result 4. The running helper was the managed independent
+`Codex Subscription Router Computer Use.app`, rather than a validation copy.
+
+Computer Use refuses to operate its host router app. Therefore the real reset
+was redeemed through the installed router's supported account API; the native
+Use reset button itself was not clicked. With the user's instruction to run
+the remaining real tests, Subscription 2 was selected because its weekly
+usage was fully depleted. One supported available reset was consumed with a
+unique redemption request ID. The response code was reset. A fresh account
+snapshot showed weekly usedPercent falling from 100 to 0 and the limit-reached
+marker clearing. Reset counts changed from 3/1/2 to 3/0/2, confirming the other
+accounts' resets were untouched. No second redemption was attempted.

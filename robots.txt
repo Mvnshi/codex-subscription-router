@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://mvnshi.github.io/codex-subscription-router/sitemap.xml

@@ -126,3 +126,35 @@ test("usage details list the short window first and include credits", () => {
   );
   assert.equal(globalThis.codexMuxUsageDetails({}), "Usage unavailable");
 });
+
+
+test("reset labels distinguish pending, failed and known counts", () => {
+  const label = globalThis.codexMuxResetCountText;
+  assert.equal(label(undefined), "Loading resets…");
+  assert.equal(label(null), "Couldn’t load resets");
+  assert.equal(label(0), "0 resets available");
+  assert.equal(label(1), "1 reset available");
+  assert.equal(label(3), "3 resets available");
+});
+
+test("picker and native sheet share pending reset requests per account", async () => {
+  const originalFetch = globalThis.fetch;
+  const pending = [];
+  globalThis.fetch = (url) => new Promise((resolve) => pending.push({ url, resolve }));
+  try {
+    const primary = globalThis.codexMuxRateLimitResets("reset-test-primary");
+    const nativeSheet = globalThis.codexMuxRateLimitResets("reset-test-primary");
+    const other = globalThis.codexMuxRateLimitResets("reset-test-secondary");
+    assert.equal(primary, nativeSheet);
+    assert.equal(pending.length, 2);
+    pending[0].resolve({ ok: true, json: async () => ({ available_count: 3 }) });
+    pending[1].resolve({ ok: true, json: async () => ({ available_count: 1 }) });
+    assert.equal(globalThis.codexMuxAvailableResetCount(await primary), 3);
+    assert.equal(globalThis.codexMuxAvailableResetCount(await nativeSheet), 3);
+    assert.equal(globalThis.codexMuxAvailableResetCount(await other), 1);
+    const refreshed = globalThis.codexMuxRateLimitResets("reset-test-primary");
+    assert.equal(pending.length, 3, "settled requests must allow fresh balances");
+    pending[2].resolve({ ok: true, json: async () => ({ available_count: 2 }) });
+    assert.equal(globalThis.codexMuxAvailableResetCount(await refreshed), 2);
+  } finally { globalThis.fetch = originalFetch; }
+});

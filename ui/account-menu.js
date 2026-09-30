@@ -251,10 +251,23 @@ function codexMuxPooledUsageWindow(window, accountWindows) {
   };
 }
 
-async function codexMuxRateLimitResets(accountId) {
-  return codexMuxRequest(
+const codexMuxResetRequests = new Map();
+
+function codexMuxRateLimitResets(accountId) {
+  if (codexMuxResetRequests.has(accountId)) {
+    return codexMuxResetRequests.get(accountId);
+  }
+  const request = codexMuxRequest(
     `/accounts/${encodeURIComponent(accountId)}/rate-limit-resets`,
-  );
+  ).finally(() => codexMuxResetRequests.delete(accountId));
+  codexMuxResetRequests.set(accountId, request);
+  return request;
+}
+
+function codexMuxResetCountText(count) {
+  if (count === undefined) return "Loading resets…";
+  if (count === null) return "Couldn’t load resets";
+  return count === 1 ? "1 reset available" : `${count} resets available`;
 }
 
 function codexMuxAvailableResetCount(resets) {
@@ -326,17 +339,16 @@ function CodexMuxUseResetAccountState() {
       return next;
     });
     setLoading(false);
-    const entries = await Promise.all(
+    await Promise.all(
       connected.map(async (account) => {
+        let count = null;
         try {
           const resets = await codexMuxRateLimitResets(account.id);
-          return [account.id, codexMuxAvailableResetCount(resets)];
-        } catch {
-          return [account.id, null];
-        }
+          count = codexMuxAvailableResetCount(resets);
+        } catch {}
+        setResetCounts((current) => ({ ...current, [account.id]: count }));
       }),
     );
-    setResetCounts(Object.fromEntries(entries));
   }, []);
 
   kXc.useEffect(() => {
@@ -409,12 +421,7 @@ function CodexMuxResetAccountSelector({
               const selected = account.id === selectedId;
               const count = resetCounts[account.id];
               const credits = codexMuxCreditsText(account.credits);
-              const resetText =
-                count == null
-                  ? "Resets unavailable"
-                  : count === 1
-                    ? "1 reset available"
-                    : `${count} resets available`;
+              const resetText = codexMuxResetCountText(count);
               return (0, e7.jsxs)(
                 "button",
                 {
@@ -1365,6 +1372,7 @@ globalThis.CodexMuxUseResetAccountState = CodexMuxUseResetAccountState;
 globalThis.codexMuxProfileData = codexMuxProfileData;
 globalThis.codexMuxRateLimitResets = codexMuxRateLimitResets;
 globalThis.codexMuxConsumeRateLimitReset = codexMuxConsumeRateLimitReset;
+globalThis.codexMuxResetCountText = codexMuxResetCountText;
 globalThis.codexMuxAvailableResetCount = codexMuxAvailableResetCount;
 globalThis.codexMuxBindingWindow = codexMuxBindingWindow;
 globalThis.codexMuxIsUsable = codexMuxIsUsable;

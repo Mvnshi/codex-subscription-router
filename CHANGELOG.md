@@ -5,6 +5,11 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Reset balances distinguish loading from failed requests and update each
+  subscription independently. The Usage sheet and picker share pending requests.
+
 ### Added
 
 - Provisional ChatGPT build `12246` support: split renderer chunks, packaged

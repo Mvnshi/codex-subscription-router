@@ -96,3 +96,8 @@ No real resets were redeemed. Actual reset redemption and desktop Computer Use
 remain unverified: macOS Accessibility and Screen Recording approval is still
 pending. These limits keep the build provisional despite the passing routing
 and screen checks.
+
+The reset-count follow-up was checked against live read-only responses: the
+picker showed 3, 1 and 2 resets. Selecting Subscription 2 changed the native
+sheet to 1 available, matching its picker row. Pending counts now show loading
+and settle independently; native and picker queries share pending requests.

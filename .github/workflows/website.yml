@@ -4,35 +4,38 @@ on:
     branches: [main]
     paths:
       - 'website/**'
+      - 'scripts/publish_website.sh'
       - '.github/workflows/website.yml'
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
   pages: write
-  id-token: write
 concurrency:
-  group: github-pages
+  group: github-pages-source
   cancel-in-progress: false
 jobs:
-  deploy:
+  publish-source:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Check website JavaScript
         run: node --check website/app.js
-      - name: Configure Pages
-        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
-      - name: Upload website
-        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
-        with:
-          path: website
-      - name: Publish website
-        id: deployment
-        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+      - name: Authenticate source publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh auth setup-git
+      - name: Publish static source to gh-pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/publish_website.sh
+      # GITHUB_TOKEN pushes do not trigger Pages builds automatically.
+      - name: Request native Pages build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAGES_REPOSITORY: ${{ github.repository }}
+        run: gh api --method POST "repos/${PAGES_REPOSITORY}/pages/builds"

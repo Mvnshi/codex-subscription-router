@@ -5,8 +5,8 @@ Maintained by [Mvnshi](https://github.com/Mvnshi), based on
 with community compatibility work and its original authorship preserved.
 See [branch status and credits](docs/MAINTAINED.md).
 
-[Website source](website/) ·
-[Private website preview](https://codex-subscription-router.brevangblminor.chatgpt.site)
+[Visit the website](https://mvnshi.github.io/codex-subscription-router/) ·
+[Website source](website/)
 
 Supports the recorded official macOS builds `6396` through `12246`. Build `8109` is
 provisional: it patches, signs, launches and loads connected accounts, but

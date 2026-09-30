@@ -31,6 +31,7 @@ func New(address, token string, multiplexer *mux.Multiplexer, uiTests bool) *Ser
 	router.HandleFunc("/v1/accounts/", server.accountAction)
 	router.HandleFunc("/v1/thread-account", server.threadAccount)
 	router.HandleFunc("/v1/routing", server.routing)
+	router.HandleFunc("/v1/reset-policy", server.resetPolicy)
 	router.HandleFunc("/v1/profile/combined", server.combinedProfile)
 	router.HandleFunc("/v1/events", server.events)
 	if uiTests {
@@ -293,11 +294,16 @@ func (s *Server) accountAction(response http.ResponseWriter, request *http.Reque
 	}
 	if len(parts) == 3 && parts[1] == "rate-limit-resets" && parts[2] == "consume" && request.Method == http.MethodPost {
 		var input struct {
+			Confirmed       bool    `json:"confirmed"`
 			CreditID        *string `json:"creditId"`
 			RedeemRequestID string  `json:"redeemRequestId"`
 		}
 		if err := decodeJSON(request, &input); err != nil {
 			writeJSON(response, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		if !input.Confirmed && s.mux.Routing().ResetPolicy != "auto" {
+			writeJSON(response, http.StatusConflict, map[string]any{"error": "Confirm before using a reset credit", "confirmationRequired": true})
 			return
 		}
 		result, err := s.mux.ConsumeRateLimitResetCredit(ctx, accountID, input.CreditID, input.RedeemRequestID)
@@ -435,4 +441,31 @@ func writeRawJSON(response http.ResponseWriter, status int, value json.RawMessag
 
 func methodNotAllowed(response http.ResponseWriter) {
 	writeJSON(response, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+}
+
+func (s *Server) resetPolicy(response http.ResponseWriter, request *http.Request) {
+	if !s.authorized(request) {
+		writeJSON(response, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+		return
+	}
+	if request.Method == http.MethodGet {
+		writeJSON(response, http.StatusOK, map[string]any{"resetPolicy": s.mux.Routing().ResetPolicy})
+		return
+	}
+	if request.Method != http.MethodPut {
+		methodNotAllowed(response)
+		return
+	}
+	var input struct {
+		ResetPolicy string `json:"resetPolicy"`
+	}
+	if err := decodeJSON(request, &input); err != nil {
+		writeJSON(response, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := s.mux.SetResetPolicy(input.ResetPolicy); err != nil {
+		writeJSON(response, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"resetPolicy": s.mux.Routing().ResetPolicy})
 }

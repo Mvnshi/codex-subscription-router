@@ -44,6 +44,7 @@ function codexMuxRememberAccounts(accounts) {
 async function codexMuxFetchAccounts() {
   const result = await codexMuxRequest("/accounts");
   const accounts = result.accounts || [];
+  globalThis.__codexMuxResetPolicy = result.routing?.resetPolicy === "auto" ? "auto" : "ask";
   codexMuxRememberAccounts(accounts);
   return accounts;
 }
@@ -286,11 +287,18 @@ function codexMuxAvailableResetCount(resets) {
 }
 
 async function codexMuxConsumeRateLimitReset(accountId, input) {
+  if (!accountId) throw new Error("Wait for subscription details to load before using a reset.");
+  const policy = (await codexMuxRequest("/reset-policy")).resetPolicy;
+  const label = codexMuxCachedAccounts().find((account) => account.id === accountId)?.label || "this subscription";
+  if (policy !== "auto" && !window.confirm(`Use one reset credit from ${label}? This will spend that reset.`)) {
+    throw new Error("Reset cancelled.");
+  }
   return codexMuxRequest(
     `/accounts/${encodeURIComponent(accountId)}/rate-limit-resets/consume`,
     {
       method: "POST",
       body: JSON.stringify({
+        confirmed: policy !== "auto",
         creditId: input.creditId ?? null,
         redeemRequestId: input.redeemRequestId,
       }),
@@ -766,6 +774,19 @@ function CodexMuxAccountMenu() {
       "codex-mux-total",
     ),
   );
+
+  const resetAuto = globalThis.__codexMuxResetPolicy === "auto";
+  for (const [policy, label, detail] of [
+    ["ask", "Ask me", "Confirm before spending a reset credit (default)."],
+    ["auto", "Use automatically", "Spend a reset only when every subscription is out of usage."],
+  ]) {
+    rows.push((0, e7.jsx)(_H, {
+      SubText: detail,
+      rightIcon: (resetAuto ? "auto" : "ask") === policy ? "✓" : null,
+      onSelect: (event) => perform(event, () => codexMuxRequest("/reset-policy", {method:"PUT",body:JSON.stringify({resetPolicy:policy})})),
+      children: `Usage resets: ${label}`,
+    }, `codex-mux-reset-policy-${policy}`));
+  }
 
   if (connected.length > 1) {
     const routingSummary = pinned ? pinned.label : "Automatic";

@@ -5,6 +5,10 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Add persisted usage-reset policy, defaulting to Ask me. Manual redemption
+  requires confirmation; automatic redemption is opt-in, follows account
+  failover, and prevents concurrent or uncertain requests from draining credits.
+
 ### Fixed
 
 - Reset balances distinguish loading from failed requests and update each

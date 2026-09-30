@@ -210,15 +210,16 @@ func (m *Multiplexer) RemoveAccount(ctx context.Context, id string) error {
 
 // RoutingState describes how new chats are assigned.
 type RoutingState struct {
+	ResetPolicy        string `json:"resetPolicy"`
 	Mode               string `json:"mode"`
 	PreferredAccountID string `json:"preferredAccountId,omitempty"`
 }
 
 func (m *Multiplexer) Routing() RoutingState {
 	if preferred := m.store.PreferredAccount(); preferred != "" {
-		return RoutingState{Mode: "pinned", PreferredAccountID: preferred}
+		return RoutingState{ResetPolicy: m.store.ResetPolicy(), Mode: "pinned", PreferredAccountID: preferred}
 	}
-	return RoutingState{Mode: "automatic"}
+	return RoutingState{ResetPolicy: m.store.ResetPolicy(), Mode: "automatic"}
 }
 
 // SetPreferredAccount pins new chats to one subscription, or restores

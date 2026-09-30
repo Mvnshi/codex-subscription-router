@@ -158,3 +158,45 @@ test("picker and native sheet share pending reset requests per account", async (
     assert.equal(globalThis.codexMuxAvailableResetCount(await refreshed), 2);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+
+test("ask mode cancels without consuming when confirmation is declined", async () => {
+  const originalFetch=globalThis.fetch,originalWindow=globalThis.window;
+  let posts=0;
+  globalThis.window={confirm:()=>false};
+  globalThis.fetch=async(url,options)=>{
+    if(options.method==="POST")posts++;
+    return {ok:true,json:async()=>({resetPolicy:"ask"})};
+  };
+  try {
+    await assert.rejects(globalThis.codexMuxConsumeRateLimitReset("primary",{creditId:"fake",redeemRequestId:"fake"}),/Reset cancelled/);
+    assert.equal(posts,0);
+  } finally {globalThis.fetch=originalFetch;globalThis.window=originalWindow;}
+});
+
+test("missing subscription fails before reading policy or consuming", async () => {
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async () => { requests++; throw new Error("unexpected request"); };
+  try {
+    await assert.rejects(globalThis.codexMuxConsumeRateLimitReset(null, {}), /Wait for subscription details/);
+    assert.equal(requests, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("only accepted confirmation sets confirmed, while auto remains unconfirmed", async () => {
+  const originalFetch = globalThis.fetch, originalWindow = globalThis.window;
+  try {
+    for (const policy of ["ask", "auto"]) {
+      let prompts = 0, posted;
+      globalThis.window = { confirm: () => { prompts++; return true; } };
+      globalThis.fetch = async (_url, options) => {
+        if (options.method === "POST") posted = JSON.parse(options.body);
+        return { ok: true, json: async () => options.method === "POST" ? { code: "reset" } : { resetPolicy: policy } };
+      };
+      await globalThis.codexMuxConsumeRateLimitReset("primary", { creditId: "fake", redeemRequestId: "fake" });
+      assert.equal(prompts, policy === "ask" ? 1 : 0);
+      assert.equal(posted.confirmed, policy === "ask");
+    }
+  } finally { globalThis.fetch = originalFetch; globalThis.window = originalWindow; }
+});

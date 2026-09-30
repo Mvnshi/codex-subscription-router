@@ -301,3 +301,31 @@ trust_level = "untrusted"
 		t.Fatalf("config sync is not stable:\n%s\n---\n%s", text, again)
 	}
 }
+
+func TestResetPolicyDefaultsAndPersists(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	s, err := Open(root, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ResetPolicy() != "ask" {
+		t.Fatal("reset policy must default to ask")
+	}
+	if err := s.SetResetPolicy("auto"); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Open(root, home)
+	if err != nil || loaded.ResetPolicy() != "auto" {
+		t.Fatalf("policy not persisted: %v", err)
+	}
+	if err := loaded.SetResetPolicy("unknown"); err == nil || loaded.ResetPolicy() != "auto" {
+		t.Fatal("invalid policy changed setting")
+	}
+	if err := loaded.SetResetPolicy("ask"); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _ = Open(root, home)
+	if loaded.ResetPolicy() != "ask" {
+		t.Fatal("ask mode not persisted")
+	}
+}

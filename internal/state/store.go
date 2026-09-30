@@ -32,6 +32,7 @@ type persistedState struct {
 	// PreferredAccount pins new chats to one subscription while it has
 	// capacity. Empty means automatic routing. Older builds ignore the field.
 	PreferredAccount string `json:"preferredAccount,omitempty"`
+	ResetPolicy      string `json:"resetPolicy,omitempty"`
 }
 
 // Store persists only routing metadata. OAuth credentials and conversation
@@ -44,6 +45,7 @@ type Store struct {
 	accounts         []Account
 	owners           map[string]string
 	preferred        string
+	resetPolicy      string
 }
 
 func Open(root, primaryCodexHome string) (*Store, error) {
@@ -78,6 +80,9 @@ func Open(root, primaryCodexHome string) (*Store, error) {
 			store.owners = persisted.ThreadOwner
 		}
 		store.preferred = persisted.PreferredAccount
+		if persisted.ResetPolicy == "auto" {
+			store.resetPolicy = "auto"
+		}
 	case errors.Is(err, os.ErrNotExist):
 		store.accounts = []Account{{
 			ID:         "primary",
@@ -356,6 +361,7 @@ func (s *Store) saveLocked() error {
 		Accounts:         s.accounts,
 		ThreadOwner:      s.owners,
 		PreferredAccount: s.preferred,
+		ResetPolicy:      s.resetPolicy,
 	}
 	data, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {
@@ -380,4 +386,27 @@ func randomID() (string, error) {
 		return "", fmt.Errorf("generate account ID: %w", err)
 	}
 	return hex.EncodeToString(bytes), nil
+}
+
+func (s *Store) ResetPolicy() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.resetPolicy == "auto" {
+		return "auto"
+	}
+	return "ask"
+}
+func (s *Store) SetResetPolicy(policy string) error {
+	if policy != "ask" && policy != "auto" {
+		return errors.New("reset policy must be ask or auto")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.resetPolicy
+	s.resetPolicy = policy
+	if err := s.saveLocked(); err != nil {
+		s.resetPolicy = previous
+		return err
+	}
+	return nil
 }

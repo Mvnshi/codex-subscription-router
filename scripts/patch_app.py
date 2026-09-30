@@ -1337,8 +1337,7 @@ def patch_renderer(extracted: Path, token: str) -> None:
         reset_mutation_replacement = (
             "function x2i(){let e=Ob(),t=sD(),n=window.__codexMuxResetAccountId,"
             "r=[`rate-limit-reset-credits`,n??`primary`];return Fb({"
-            "mutationFn:n&&globalThis.codexMuxConsumeRateLimitReset?"
-            "i=>globalThis.codexMuxConsumeRateLimitReset(n,i):S2i,"
+            "mutationFn:i=>globalThis.codexMuxConsumeRateLimitReset(n,i),"
             "onSuccess:(n,i)=>{let{creditId:a}=i,o=n.code;"
             "if(o===`reset`||o===`already_redeemed`){let t=o===`reset`?"
             "n.credit?.id??a:a;e.setQueryData(r,e=>i0i(e,o,t))}"
@@ -1357,8 +1356,7 @@ def patch_renderer(extracted: Path, token: str) -> None:
         reset_mutation_replacement = (
             "function f2i(){let e=mb(),t=mD(),n=window.__codexMuxResetAccountId,"
             "r=[`rate-limit-reset-credits`,n??`primary`];return xb({"
-            "mutationFn:n&&globalThis.codexMuxConsumeRateLimitReset?"
-            "i=>globalThis.codexMuxConsumeRateLimitReset(n,i):p2i,"
+            "mutationFn:i=>globalThis.codexMuxConsumeRateLimitReset(n,i),"
             "onSuccess:(n,i)=>{let{creditId:a}=i,o=n.code;"
             "if(o===`reset`||o===`already_redeemed`){let t=o===`reset`?"
             "n.credit?.id??a:a;e.setQueryData(r,e=>Y1i(e,o,t))}"
@@ -1377,7 +1375,7 @@ def patch_renderer(extracted: Path, token: str) -> None:
         reset_mutation_replacement = (
             "function Aoi(){let e=ct(),t=Uw(),n=window.__codexMuxResetAccountId,"
             "r=[`rate-limit-reset-credits`,n??`primary`];return Qt({"
-            "mutationFn:n?i=>codexMuxConsumeRateLimitReset(n,i):joi,"
+            "mutationFn:i=>globalThis.codexMuxConsumeRateLimitReset(n,i),"
             "onSuccess:(n,i)=>{let{creditId:a}=i,o=n.code;"
             "if(o===`reset`||o===`already_redeemed`){let t=o===`reset`?"
             "n.credit?.id??a:a;e.setQueryData(r,e=>eoi(e,o,t))}"
@@ -1396,7 +1394,7 @@ def patch_renderer(extracted: Path, token: str) -> None:
         reset_mutation_replacement = (
             "function d6r(){let e=lt(),t=zO(),n=window.__codexMuxResetAccountId,"
             "r=[`rate-limit-reset-credits`,n??`primary`];return $t({"
-            "mutationFn:n?i=>codexMuxConsumeRateLimitReset(n,i):f6r,"
+            "mutationFn:i=>globalThis.codexMuxConsumeRateLimitReset(n,i),"
             "onSuccess:(n,i)=>{let{creditId:a}=i,o=n.code;"
             "if(o===`reset`||o===`already_redeemed`){let t=o===`reset`?"
             "n.credit?.id??a:a;e.setQueryData(r,e=>F3r(e,o,t))}"
@@ -2131,8 +2129,7 @@ def patch_chunked_renderer(webview: Path, token: str) -> None:
             f"function {m.group(1)}(){{let e={m.group(2)}(),t={m.group(3)}(),"
             "n=window.__codexMuxResetAccountId,"
             f"r=[`rate-limit-reset-credits`,n??`primary`];return {m.group(6)}({{"
-            "mutationFn:n&&globalThis.codexMuxConsumeRateLimitReset?"
-            f"i=>globalThis.codexMuxConsumeRateLimitReset(n,i):{m.group(4)},"
+            "mutationFn:i=>globalThis.codexMuxConsumeRateLimitReset(n,i),"
             "onSuccess:(n,i)=>{let{creditId:a}=i,o=n.code;"
             "if(o===`reset`||o===`already_redeemed`){let t=o===`reset`?"
             f"n.credit?.id??a:a;e.setQueryData(r,e=>{m.group(5)}(e,o,t))}}"

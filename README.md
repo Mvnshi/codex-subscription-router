@@ -351,6 +351,14 @@ login are scoped to the selected subscription.
 the sheet. Selecting a subscription changes the displayed balance and ensures
 the reset is consumed only for that account.
 
+The account menu offers **Usage resets: Ask me** (default) and **Use automatically**.
+Ask me confirms every manual redemption and never spends a reset during routing.
+Automatic mode is explicit opt-in: ordinary account failover comes first, then
+a supported, unexpired reset can be used only when every usable account is
+depleted. Automatic spending is serialized across accounts with a ten-minute
+cooldown after a redemption request, including uncertain network outcomes.
+Reset credits belong to their subscription and are never transferred.
+
 ![Account-scoped plugin connections](screenshots/plugin-account-picker-secondary-final.png)
 
 ## Update or rebuild

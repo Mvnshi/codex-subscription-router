@@ -87,6 +87,9 @@ type Multiplexer struct {
 	profilePending  map[string]bool
 	now             func() time.Time
 
+	resetAutoMu          sync.Mutex
+	resetAutoAttempt     map[string]time.Time
+	resetAutoLast        time.Time
 	resetCreditsMu       sync.Mutex
 	resetCreditsCache    map[string]resetCreditsCacheEntry
 	resetCreditsEndpoint string
@@ -237,14 +240,28 @@ func (m *Multiplexer) routeNewThread(message protocol.Message) {
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
 	account, reason, err := m.chooseAccount(ctx)
+	if errors.Is(err, errNoSubscriptionCapacity) {
+		for _, candidate := range m.store.Accounts() {
+			spent, ready := m.tryAutomaticReset(ctx, candidate.ID)
+			if spent {
+				if !ready {
+					m.write(protocol.Failure(message.ID, -32029, "A reset request was sent. Check usage before retrying."))
+					return
+				}
+				break
+			}
+		}
+		account, reason, err = m.chooseAccount(ctx)
+	}
 	if err != nil {
 		if errors.Is(err, errNoSubscriptionCapacity) {
 			m.write(m.allSubscriptionsDepleted(ctx, message.ID))
-			return
+		} else {
+			m.write(protocol.Failure(message.ID, -32020, err.Error()))
 		}
-		m.write(protocol.Failure(message.ID, -32020, err.Error()))
 		return
 	}
+
 	if err := m.forward(account.ID, message); err != nil {
 		m.write(protocol.Failure(message.ID, -32021, err.Error()))
 		return
@@ -356,6 +373,21 @@ func (m *Multiplexer) failoverTurn(
 	excluded map[string]struct{},
 ) {
 	fallback, _, err := m.chooseAccountExcluding(ctx, excluded)
+	if errors.Is(err, errNoSubscriptionCapacity) {
+		spent, ready := m.tryAutomaticReset(ctx, sourceAccountID)
+		if spent {
+			if !ready {
+				m.write(protocol.Failure(message.ID, -32029, "A reset request was sent. Check usage before retrying."))
+				return
+			}
+			if err := m.forwardWithExclusions(sourceAccountID, message, excluded); err != nil {
+				m.write(protocol.Failure(message.ID, -32023, err.Error()))
+			}
+			return
+		}
+		fallback, _, err = m.chooseAccountExcluding(ctx, excluded)
+	}
+
 	if err != nil {
 		m.write(m.allSubscriptionsDepleted(ctx, message.ID))
 		return

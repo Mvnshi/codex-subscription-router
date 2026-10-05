@@ -288,6 +288,7 @@ leaves a half-installed copy behind.
 | `this installer is running as administrator` | Rerun from a normal, non-elevated PowerShell. |
 | SmartScreen warns about the app | Expected once: the copy is unsigned because its integrity resource is rewritten. |
 | The router did not update after the Store updated the official app | Rebuild: rerun the installer (it replaces the copy and keeps a backup; accounts and chat ownership are kept). |
+| Chats fail with `429 Too Many Requests` and "Server is busy, reconnecting" while one subscription is out of usage | Your Codex config probably sends model traffic through a gateway that falls back to another provider when the plan is spent, and that provider is rejecting the requests. Check which engine handled the chat (a chat sent from the official app runs on the official app's engine, not the router's). To keep the router's own engines off the gateway, set the engine provider as described above. |
 | Adding a second subscription | In the router, open the profile menu at the bottom of the sidebar, choose **Add another subscription**, and finish the device-code sign-in in the browser. |
 
 #### Install from a clone
@@ -350,8 +351,16 @@ switching provider also hides that error from the router, so it cannot fail a
 chat over mid-turn. The router still moves a chat before sending when an
 account's usage shows it is spent, and it reports "all connected subscriptions are
 depleted" for a new chat when every subscription is spent, even if the gateway
-could have served it. Remove the `model_provider` line if you want the router to
-do all the switching.
+could have served it.
+
+To make the router's engines skip such a gateway without touching your Codex
+config (other Codex apps keep using it), name the provider they should use: set
+`CODEX_MUX_ENGINE_PROVIDER=openai`, or put `openai` on the first line of
+`%USERPROFILE%\.codex-mux\engine-provider`, and restart the router. It is off by
+default, applies only to the engines the router starts, and takes effect for the
+chats you send from the router's window; the router reports an invalid value and
+stops, naming where it came from, instead of ignoring it. One model-list request
+at engine start can still use the provider from your config.
 
 ## Grant macOS permissions
 

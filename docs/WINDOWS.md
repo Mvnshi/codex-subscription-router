@@ -209,6 +209,17 @@ account usage read, not the model traffic. When every subscription is spent the
 router answers a new chat with "All connected subscriptions are depleted" instead
 of letting the gateway serve it.
 
+**Engine provider override.** `CODEX_MUX_ENGINE_PROVIDER`, or the first line of
+`<state root>/engine-provider`, makes the multiplexer start every engine with
+`-c model_provider=<id>` ahead of the desktop app's own arguments. Observed with
+`openai` on the Store build: both of the router's engines ran with that flag, a
+chat started without naming a provider reported `openai`, a real turn completed,
+and the gateway's fallback counter did not move; the official app's engines were
+unaffected. One `GET /models` at engine start still went to the provider from the
+config. The id becomes part of a command line, so only plain ids
+(`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`) are accepted, and an invalid value stops the
+multiplexer with a message naming its source.
+
 ## Shared with macOS
 
 - **Renderer patch.** `patch_renderer` injects `ui/account-menu.js` and

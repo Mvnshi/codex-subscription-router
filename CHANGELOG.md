@@ -11,6 +11,12 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ### Windows
 
+- Add an opt-in engine provider override for the router: `CODEX_MUX_ENGINE_PROVIDER`
+  or `<state root>/engine-provider` starts the router's engines with
+  `-c model_provider=<id>`, so a Codex config that routes through a gateway which
+  answers quota errors itself no longer hides them from the router. Off by default,
+  only the router's engines are affected, and an invalid id stops the router with a
+  message naming its source.
 - The Windows port now works against the Microsoft Store build of the Codex
   desktop app, the only way OpenAI distributes it. The patcher finds the package
   through the package registry, reads its manifest to pick the host executable,

@@ -1910,16 +1910,19 @@ def patch_chunked_usage_state(modal: str) -> str:
     )
     # The compiler cached the child solely on native props, excluding our
     # selection. Recreate it and remount its reset form when the account changes.
+    # The compiler's memo-cache array is named by the minifier (`t` on macOS
+    # builds, `n` on the Windows build 12947), so it is captured once and every
+    # later use must be that same identifier.
     return _sub_once(
         modal,
-        rf"let ({ident})=({ident}),({ident});return t\[\d+\].{{0,500}}?"
-        rf"\(\3=\(0,({ident})\.jsx\)\(({ident}),"
-        rf"(\{{defaultResetCreditsOpen:{ident},errorMessage:{ident},"
+        rf"let ({ident})=({ident}),({ident});return (?P<cache>{ident})\[\d+\].{{0,500}}?"
+        rf"\(\3=\(0,(?P<jsx>{ident})\.jsx\)\((?P<component>{ident}),"
+        rf"(?P<props>\{{defaultResetCreditsOpen:{ident},errorMessage:{ident},"
         rf"initialAvailableCount:{ident},isResetting:{ident},onClose:{ident},"
-        rf"onResetCredit:\1\}})\),t\[\d+\].{{0,500}}?\):\3=t\[\d+\],\3",
+        rf"onResetCredit:\1\}})\),(?P=cache)\[\d+\].{{0,500}}?\):\3=(?P=cache)\[\d+\],\3",
         lambda m: (
-            f"let {m.group(1)}={m.group(2)};return (0,{m.group(4)}.jsx)"
-            f"({m.group(5)},{m.group(6)},window.__codexMuxResetAccountId??`primary`)"
+            f"let {m.group(1)}={m.group(2)};return (0,{m.group('jsx')}.jsx)"
+            f"({m.group('component')},{m.group('props')},window.__codexMuxResetAccountId??`primary`)"
         ),
         "the Usage sheet selection propagation",
     )

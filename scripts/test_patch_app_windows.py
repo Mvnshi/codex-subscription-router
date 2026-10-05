@@ -1,6 +1,7 @@
 """Windows patcher tests; run on any OS, no Windows tools or official app required."""
 import contextlib
 import errno
+import hashlib
 import io
 import json
 import os
@@ -11,7 +12,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from unittest import mock
 
 import patch_app
@@ -84,8 +85,14 @@ class ImportTests(unittest.TestCase):
             win.patch_app(None, None, False, False, None, None, True)
         self.assertIn("runs on Windows", str(caught.exception))
 
-    def test_tested_builds_table_is_empty_until_verified(self):
-        self.assertEqual(win.TESTED_WINDOWS_SOURCE_BUILDS, {})
+    def test_tested_builds_table_entries_are_well_formed(self):
+        self.assertIn(("154.0.8037.98", "154.0.8037.98"), win.TESTED_WINDOWS_SOURCE_BUILDS)
+        for key, recorded in win.TESTED_WINDOWS_SOURCE_BUILDS.items():
+            hashes = (recorded,) if isinstance(recorded, str) else recorded
+            self.assertEqual(len(key), 2)
+            self.assertTrue(hashes)
+            for digest in hashes:
+                self.assertRegex(digest, r"^[0-9a-f]{64}$")
 
 
 class DestinationTests(unittest.TestCase):
@@ -160,19 +167,130 @@ class SourceDiscoveryTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             win.discover_source(self.env, self.root / "elsewhere")
 
-    def test_store_installs_are_refused(self):
+    def test_store_installs_are_accepted(self):
+        # The Store package is the only way the Windows app is distributed, and
+        # its files can be read (and copied) by the owning user, so it is a
+        # valid source rather than a refused one.
         app = make_app(
-            self.pf / "WindowsApps" / "OpenAI.ChatGPT_1.0_x64__abc", "ChatGPT.exe"
+            self.pf / "WindowsApps" / "OpenAI.Codex_1.0_x64__abc" / "app", "ChatGPT.exe"
         )
-        with self.assertRaises(RuntimeError) as caught:
-            win.discover_source(self.env, app)
-        self.assertIn("Store/MSIX installs cannot be copied", str(caught.exception))
+        self.assertEqual(win.discover_source(self.env, app), app)
+        self.assertTrue(win.is_store_install(app))
+        self.assertTrue(win.is_store_install(self.root / "windowsapps" / "ChatGPT"))
+        self.assertFalse(win.is_store_install(self.lad / "Programs" / "ChatGPT"))
         with self.assertRaises(RuntimeError):
             win.discover_source(self.env, self.root / "windowsapps" / "ChatGPT")
+
+    def test_store_candidate_counts_towards_exactly_one(self):
+        store = make_app(
+            self.pf / "WindowsApps" / "OpenAI.Codex_1.0_x64__abc" / "app", "ChatGPT.exe"
+        )
+        self.assertEqual(win.discover_source(self.env, None, [store]), store)
+        # A Store package without an app.asar does not qualify.
+        empty = self.pf / "WindowsApps" / "Other_1.0_x64__abc" / "app"
+        empty.mkdir(parents=True)
+        self.assertEqual(win.discover_source(self.env, None, [empty, store]), store)
+        # A second install makes the choice ambiguous and names both.
+        other = make_app(self.lad / "Programs" / "ChatGPT", "ChatGPT.exe")
+        with self.assertRaises(RuntimeError) as caught:
+            win.discover_source(self.env, None, [store])
+        self.assertIn("found 2", str(caught.exception))
+        self.assertIn(str(other), str(caught.exception))
+        self.assertIn(str(store), str(caught.exception))
 
     def test_is_electron_app_directory(self):
         self.assertFalse(win.is_electron_app_directory(self.root))
         self.assertTrue(win.is_electron_app_directory(make_app(self.root / "a")))
+
+
+class StoreLookupTests(unittest.TestCase):
+    """store_install_candidates asks the package registry; nothing here spawns PowerShell."""
+
+    def lookup(self, stdout="", error=None):
+        def fake_run_helper(command, tool, *, errors="strict"):
+            self.command, self.tool, self.errors = command, tool, errors
+            if error is not None:
+                raise error
+            return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+        with mock.patch.object(win, "run_helper", fake_run_helper):
+            return win.store_install_candidates()
+
+    def test_queries_the_package_by_name_without_elevation(self):
+        self.lookup("26.930.3930.0|C:\\WindowsApps\\OpenAI.Codex_26.930.3930.0_x64__a\r\n")
+        self.assertEqual(self.command[:3], ["powershell", "-NoProfile", "-NonInteractive"])
+        self.assertIn("Get-AppxPackage -Name 'OpenAI.Codex'", self.command[-1])
+        self.assertEqual(self.errors, "replace")
+
+    def test_returns_the_app_directory_of_the_newest_version(self):
+        output = (
+            "26.930.3930.0|C:\\WindowsApps\\OpenAI.Codex_26.930.3930.0_x64__a\r\n"
+            "26.1000.1.0|C:\\WindowsApps\\OpenAI.Codex_26.1000.1.0_x64__a\r\n"
+            "26.99.9.0|C:\\WindowsApps\\OpenAI.Codex_26.99.9.0_x64__a\r\n"
+        )
+        # Compared as numbers, not text: 1000 is newer than 930.
+        self.assertEqual(
+            self.lookup(output),
+            [Path("C:\\WindowsApps\\OpenAI.Codex_26.1000.1.0_x64__a") / "app"],
+        )
+
+    def test_missing_package_or_failed_lookup_means_no_candidate(self):
+        self.assertEqual(self.lookup(""), [])
+        self.assertEqual(self.lookup("\r\nnot a package line\r\n"), [])
+        self.assertEqual(self.lookup(error=RuntimeError("package lookup failed")), [])
+        self.assertEqual(self.lookup(error=OSError("no powershell")), [])
+
+
+STORE_MANIFEST = """\ufeff<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10">
+  <Identity Name="OpenAI.Codex" Version="26.930.3930.0" />
+  <Applications>
+    <Application Id="App" Executable="{main}" EntryPoint="Windows.FullTrustApplication" />
+    <Application Id="CodexCoreCommandRunner" Executable="app/resources/codex-command-runner.exe" />
+  </Applications>
+</Package>
+"""
+
+
+class ManifestExecutableTests(unittest.TestCase):
+    def package(self, manifest=None, executables=("ChatGPT.exe", "chrome_proxy.exe", "elevation_service.exe")):
+        root = Path(tempfile.mkdtemp()) / "OpenAI.Codex_1_x64__a"
+        app = make_app(root / "app", *executables)
+        if manifest is not None:
+            (root / "AppxManifest.xml").write_bytes(manifest.encode("utf-8"))
+        return app
+
+    def test_the_main_applications_executable_is_the_host(self):
+        app = self.package(STORE_MANIFEST.format(main="app/ChatGPT.exe"))
+        self.assertEqual(win.manifest_executable_name(app), "ChatGPT.exe")
+        # Several Chromium helper executables sit beside it; the manifest is exact.
+        self.assertEqual(win.select_electron_executable(app, None), app / "ChatGPT.exe")
+        # An explicit override still wins over the manifest.
+        self.assertEqual(
+            win.select_electron_executable(app, "chrome_proxy.exe"), app / "chrome_proxy.exe"
+        )
+
+    def test_without_a_usable_manifest_discovery_is_unchanged(self):
+        for label, manifest in (
+            ("absent", None),
+            ("malformed", "<Package"),
+            ("outside the app directory", STORE_MANIFEST.format(main="other/ChatGPT.exe")),
+            ("no executable", STORE_MANIFEST.format(main="").replace(' Executable=""', "")),
+        ):
+            with self.subTest(label=label):
+                app = self.package(manifest)
+                self.assertIsNone(win.manifest_executable_name(app))
+                with self.assertRaises(RuntimeError) as caught:
+                    win.select_electron_executable(app, None)
+                self.assertIn("pass --electron-executable", str(caught.exception))
+
+    def test_a_declared_executable_that_is_missing_falls_back_to_discovery(self):
+        app = self.package(
+            STORE_MANIFEST.format(main="app/Missing.exe"), executables=("ChatGPT.exe",)
+        )
+        self.assertEqual(win.manifest_executable_name(app), "Missing.exe")
+        self.assertEqual(win.select_electron_executable(app, None), app / "ChatGPT.exe")
 
 
 class ElectronExecutableTests(unittest.TestCase):
@@ -241,6 +359,23 @@ class CodexExecutableTests(unittest.TestCase):
         self.assertIn("found 2", str(caught.exception))
         self.assertIn("resources/codex.exe", str(caught.exception).replace("\\", "/"))
 
+    def test_a_same_named_stub_beside_the_host_is_not_the_engine(self):
+        # The Store package ships a 20 KB Codex.exe next to ChatGPT.exe; the
+        # engine is the one under resources.
+        (self.app / "Codex.exe").write_bytes(b"MZ stub")
+        (self.app / "resources" / "codex.exe").write_bytes(b"MZ engine")
+        self.assertEqual(
+            win.locate_codex_executable(self.app, None), self.app / "resources" / "codex.exe"
+        )
+
+    def test_narrowing_to_resources_only_applies_when_it_leaves_one(self):
+        (self.app / "Codex.exe").write_bytes(b"MZ stub")
+        (self.app / "resources" / "codex.exe").write_bytes(b"MZ engine")
+        (self.nested / "codex.exe").write_bytes(b"MZ other engine")
+        with self.assertRaises(RuntimeError) as caught:
+            win.locate_codex_executable(self.app, None)
+        self.assertIn("found 3", str(caught.exception))
+
     def test_override_relative_path(self):
         (self.app / "resources" / "codex.exe").write_bytes(b"MZ")
         self.assertEqual(
@@ -282,33 +417,89 @@ class CodexExecutableTests(unittest.TestCase):
         self.assertIn("must name codex.exe", str(caught.exception))
 
 
-class UnpackGlobTests(unittest.TestCase):
-    def test_scoped_and_plain_packages(self):
-        app = make_app(
-            Path(tempfile.mkdtemp()) / "a",
-            unpacked={"better-sqlite3": {}, "node-pty": {}, "@worklouder/lib": {}},
-        )
+# Shaped like the real OpenAI.Codex 26.930.3930.0 listing (backslashes, as asar
+# prints them on Windows): whole directories unpacked for better-sqlite3 and
+# node-pty, and two loose .node files inside a nested package whose directories
+# stay packed. The packed JavaScript beside them is what an over-broad pattern
+# would drag onto the disk.
+STORE_LISTING = (
+    "pack   : \\node_modules\r\n"
+    "pack   : \\node_modules\\@worklouder\r\n"
+    "pack   : \\node_modules\\@worklouder\\device-kit-oai\r\n"
+    "pack   : \\node_modules\\@worklouder\\device-kit-oai\\node_modules\r\n"
+    "pack   : \\node_modules\\@worklouder\\device-kit-oai\\node_modules\\@serialport\r\n"
+    "pack   : \\node_modules\\@worklouder\\device-kit-oai\\node_modules\\@serialport\\bindings-cpp\r\n"
+    "pack   : \\node_modules\\@worklouder\\device-kit-oai\\node_modules\\@serialport\\bindings-cpp\\build\r\n"
+    "pack   : \\node_modules\\@worklouder\\device-kit-oai\\node_modules\\@serialport\\bindings-cpp\\build\\Release\r\n"
+    "unpack : \\node_modules\\@worklouder\\device-kit-oai\\node_modules\\@serialport\\bindings-cpp\\build\\Release\\bindings.node\r\n"
+    "pack   : \\node_modules\\@worklouder\\device-kit-oai\\node_modules\\@serialport\\bindings-cpp\\dist\\index.js\r\n"
+    "unpack : \\node_modules\\@worklouder\\device-kit-oai\\node_modules\\node-hid\\build\\Release\\HID.node\r\n"
+    "pack   : \\node_modules\\better-sqlite3\r\n"
+    "unpack : \\node_modules\\better-sqlite3\\build\r\n"
+    "unpack : \\node_modules\\better-sqlite3\\build\\Release\r\n"
+    "unpack : \\node_modules\\better-sqlite3\\build\\Release\\better_sqlite3.node\r\n"
+    "unpack : \\node_modules\\better-sqlite3\\lib\r\n"
+    "unpack : \\node_modules\\better-sqlite3\\lib\\index.js\r\n"
+    "unpack : \\node_modules\\better-sqlite3\\node_modules\r\n"
+    "unpack : \\node_modules\\better-sqlite3\\node_modules\\.bin\r\n"
+    "unpack : \\node_modules\\better-sqlite3\\node_modules\\.bin\\prebuild-install\r\n"
+    "pack   : \\node_modules\\better-sqlite3\\package.json\r\n"
+    "pack   : \\node_modules\\node-pty\r\n"
+    "unpack : \\node_modules\\node-pty\\build\r\n"
+    "unpack : \\node_modules\\node-pty\\build\\Release\r\n"
+    "unpack : \\node_modules\\node-pty\\build\\Release\\pty.node\r\n"
+    "unpack : \\node_modules\\node-pty\\lib\r\n"
+    "unpack : \\node_modules\\node-pty\\lib\\index.js\r\n"
+    "pack   : \\node_modules\\node-pty\\package.json\r\n"
+    "pack   : \\.vite\r\n"
+)
+
+
+class UnpackPatternTests(unittest.TestCase):
+    def test_reproduces_the_official_layout_exactly(self):
+        patterns = win.unpack_patterns(STORE_LISTING)
+        # Top-most unpacked directories only; their contents follow them.
         self.assertEqual(
-            win.unpack_globs(app), "node_modules/{@worklouder,better-sqlite3,node-pty}"
+            patterns.unpack_dir,
+            "{node_modules/better-sqlite3/build,node_modules/better-sqlite3/lib,"
+            "node_modules/better-sqlite3/node_modules,node_modules/node-pty/build,"
+            "node_modules/node-pty/lib}",
+        )
+        # Loose native files by base name; their directories stay packed.
+        self.assertEqual(patterns.unpack, "{HID.node,bindings.node}")
+
+    def test_whole_top_level_packages_are_never_unpacked(self):
+        # Unpacking node_modules/@worklouder wholesale also unpacks every packed
+        # file under it (the dist/ above), which exceeds the path limit on disk.
+        patterns = win.unpack_patterns(STORE_LISTING)
+        self.assertNotIn("@worklouder", patterns.unpack_dir)
+        self.assertNotIn("{node_modules/better-sqlite3,", patterns.unpack_dir)
+
+    def test_single_alternatives_have_no_braces(self):
+        patterns = win.unpack_patterns(
+            "pack   : /node_modules/x\n"
+            "unpack : /node_modules/x/build\n"
+            "unpack : /node_modules/x/build/a.node\n"
+            "unpack : /node_modules/y/b.node\n"
+        )
+        self.assertEqual(patterns, win.UnpackPatterns("b.node", "node_modules/x/build"))
+
+    def test_nothing_unpacked_gives_no_patterns(self):
+        self.assertEqual(
+            win.unpack_patterns("pack   : /a\npack   : /a/b.js\n"), win.UnpackPatterns(None, None)
         )
 
-    def test_single_package_has_no_braces(self):
-        app = make_app(Path(tempfile.mkdtemp()) / "a", unpacked={"node-pty": {}})
-        self.assertEqual(win.unpack_globs(app), "node_modules/node-pty")
+    def test_a_file_inside_an_unpacked_directory_needs_no_pattern_of_its_own(self):
+        patterns = win.unpack_patterns(
+            "unpack : /node_modules/p/lib\nunpack : /node_modules/p/lib/index.js\n"
+        )
+        self.assertEqual(patterns, win.UnpackPatterns(None, "node_modules/p/lib"))
 
-    def test_no_unpacked_tree(self):
-        self.assertIsNone(win.unpack_globs(make_app(Path(tempfile.mkdtemp()) / "a")))
-
-    def test_unknown_layouts_fail_closed(self):
-        app = make_app(Path(tempfile.mkdtemp()) / "a", unpacked={"node-pty": {}})
-        (app / "resources" / "app.asar.unpacked" / "bin").mkdir()
-        with self.assertRaises(RuntimeError) as caught:
-            win.unpack_globs(app)
-        self.assertIn("bin", str(caught.exception))
-        empty = make_app(Path(tempfile.mkdtemp()) / "b")
-        (empty / "resources" / "app.asar.unpacked" / "node_modules").mkdir(parents=True)
-        with self.assertRaises(RuntimeError):
-            win.unpack_globs(empty)
+    def test_paths_asar_would_read_as_patterns_fail_closed(self):
+        for name in ("a{b}.node", "a,b.node", "a(1).node", "a[1].node", "!a.node", "a*.node"):
+            with self.subTest(name=name), self.assertRaises(RuntimeError) as caught:
+                win.unpack_patterns(f"unpack : /node_modules/p/{name}\n")
+            self.assertIn(name, str(caught.exception))
 
 
 LISTING = """\
@@ -346,15 +537,27 @@ class AsarListingTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             win.parse_asar_listing("maybe : /node_modules/x\n")
 
-    def test_verify_unpacked_preserved(self):
-        win.verify_unpacked_preserved(LISTING, LISTING + "pack   : /.vite/build/ui-test-bridge.cjs\n")
+    def test_verify_unpacked_identical(self):
+        # New packed files (the patcher adds a bridge bundle) are fine.
+        win.verify_unpacked_identical(LISTING, LISTING + "pack   : /.vite/build/ui-test-bridge.cjs\n")
+        # A path that stopped being unpacked is an error ...
         repacked = LISTING.replace(
             "unpack : /node_modules/node-pty/build/Release/pty.node",
             "pack   : /node_modules/node-pty/build/Release/pty.node",
         )
         with self.assertRaises(RuntimeError) as caught:
-            win.verify_unpacked_preserved(LISTING, repacked)
+            win.verify_unpacked_identical(LISTING, repacked)
         self.assertIn("/node_modules/node-pty/build/Release/pty.node", str(caught.exception))
+        self.assertIn("no longer keeps", str(caught.exception))
+        # ... and so is one that became unpacked: it would land on disk as a new
+        # file the official layout never had.
+        broader = LISTING.replace(
+            "pack   : /node_modules/react/index.js", "unpack : /node_modules/react/index.js"
+        )
+        with self.assertRaises(RuntimeError) as caught:
+            win.verify_unpacked_identical(LISTING, broader)
+        self.assertIn("/node_modules/react/index.js", str(caught.exception))
+        self.assertIn("broader than the official layout", str(caught.exception))
 
 
 class PreludeTests(unittest.TestCase):
@@ -457,6 +660,39 @@ class ApproveSourceTests(unittest.TestCase):
                     False,
                 )
 
+    def test_several_hashes_may_share_one_key(self):
+        # The key is the Chromium runtime version on the Store build, so two app
+        # builds on the same runtime are two hashes under one key.
+        table = {("1.0.0.0", "1.0.0.0"): ("cd" * 32, "ab" * 32)}
+        with mock.patch.object(win, "TESTED_WINDOWS_SOURCE_BUILDS", table):
+            win.approve_source(self.IDENTITY, False)
+            win.approve_source(
+                win.SourceIdentity("1.0.0.0", "1.0.0.0", "ChatGPT", True, "cd" * 32), False
+            )
+            with self.assertRaises(RuntimeError):
+                win.approve_source(
+                    win.SourceIdentity("1.0.0.0", "1.0.0.0", "ChatGPT", True, "ef" * 32), False
+                )
+
+    def test_the_verified_store_build_is_approved_without_the_flag(self):
+        # OpenAI.Codex 26.930.3930.0, measured on a real install.
+        win.approve_source(
+            win.SourceIdentity(
+                "154.0.8037.98",
+                "154.0.8037.98",
+                "Codex",
+                True,
+                "af98213984ec4556778ef9276193d51460153fb9b30fded882d503637b84abba",
+            ),
+            False,
+        )
+        # The same runtime with a different app.asar is a different build.
+        with self.assertRaises(RuntimeError):
+            win.approve_source(
+                win.SourceIdentity("154.0.8037.98", "154.0.8037.98", "Codex", True, "00" * 32),
+                False,
+            )
+
 
 class ProtocolSchemeTests(unittest.TestCase):
     def test_call_forms_are_retargeted_and_decoys_are_kept(self):
@@ -512,6 +748,57 @@ class ProtocolSchemeTests(unittest.TestCase):
                 self.assertIn("setAsDefaultProtocolClient", str(caught.exception))
                 self.assertEqual((build / "main-a.js").read_text(encoding="utf-8"), text)
 
+    # The Store build's own registration returns early on win32 (observed in
+    # build 12947): the call exists in the bundle but never runs here.
+    WIN32_GUARDED = (
+        "function w(){if(process.platform===`win32`)return;let t=Q7(e.isPackaged);"
+        "try{e.setAsDefaultProtocolClient(t)||m.warning(`Failed`)}catch(e){}}"
+    )
+
+    def _bundle(self, text: str) -> tuple[Path, Path]:
+        extracted = Path(tempfile.mkdtemp()) / "asar"
+        build = extracted / ".vite" / "build"
+        build.mkdir(parents=True)
+        (build / "main-a.js").write_text(text, encoding="utf-8")
+        return extracted, build / "main-a.js"
+
+    def test_win32_guarded_registration_is_accepted_and_left_untouched(self):
+        extracted, bundle = self._bundle(self.WIN32_GUARDED)
+        self.assertEqual(win.retarget_protocol_scheme(extracted), 0)
+        self.assertEqual(bundle.read_text(encoding="utf-8"), self.WIN32_GUARDED)
+        self.assertEqual(win.count_unreachable_registrations(extracted), 1)
+
+    def test_win32_guard_does_not_excuse_another_registration(self):
+        for extra in (
+            "e.app.setAsDefaultProtocolClient('chatgpt');",
+            "const s=`codex`;e.app.setAsDefaultProtocolClient(s);",
+        ):
+            with self.subTest(extra=extra):
+                text = self.WIN32_GUARDED + extra
+                extracted, bundle = self._bundle(text)
+                with self.assertRaises(RuntimeError):
+                    win.retarget_protocol_scheme(extracted)
+                self.assertEqual(bundle.read_text(encoding="utf-8"), text)
+
+    def test_guard_lookalikes_still_fail_closed(self):
+        for lookalike in (
+            # wrong platform
+            "if(process.platform===`darwin`)return;let t=Q7(e.isPackaged);try{e.setAsDefaultProtocolClient(t)}catch(e){}",
+            # inverted guard: the call would run on Windows
+            "if(process.platform!==`win32`)return;let t=Q7(e.isPackaged);try{e.setAsDefaultProtocolClient(t)}catch(e){}",
+            # the guard does not return
+            "if(process.platform===`win32`)log();let t=Q7(e.isPackaged);try{e.setAsDefaultProtocolClient(t)}catch(e){}",
+            # another statement runs between the guard and the call
+            "if(process.platform===`win32`)return;x();let t=Q7(e.isPackaged);try{e.setAsDefaultProtocolClient(t)}catch(e){}",
+            # the scheme is not the value the guard's let computed
+            "if(process.platform===`win32`)return;let t=Q7(e.isPackaged);try{e.setAsDefaultProtocolClient(`chatgpt`)}catch(e){}",
+        ):
+            with self.subTest(lookalike=lookalike):
+                extracted, bundle = self._bundle(lookalike)
+                with self.assertRaises(RuntimeError):
+                    win.retarget_protocol_scheme(extracted)
+                self.assertEqual(bundle.read_text(encoding="utf-8"), lookalike)
+
 
 class LongPathTests(unittest.TestCase):
     def test_longest_path_length(self):
@@ -539,12 +826,37 @@ class LongPathTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             win.require_long_path_support(source, Path("/destination"), longest - 5, None)
 
-    def test_staging_shape_is_longer_than_the_destination(self):
+    def test_staging_shape_is_short_and_beside_the_destination(self):
         destination = Path("/lad/Programs/Codex Subscription Router")
         shape = win.staging_shape(destination)
         self.assertEqual(shape.parent.parent, destination.parent)
-        self.assertEqual(shape.name, "Codex Subscription Router")
-        self.assertEqual(len(str(shape)), len(str(destination)) + len(".codex-subscription-router-") + 8 + 1)
+        self.assertEqual(shape.name, win.STAGING_DIRECTORY_NAME)
+        self.assertEqual(
+            len(str(shape)),
+            len(str(destination.parent)) + 1 + len(win.STAGING_PREFIX) + 8 + 1 + len(win.STAGING_DIRECTORY_NAME),
+        )
+
+    def test_the_store_apps_deepest_path_fits_with_long_paths_off(self):
+        # Measured on OpenAI.Codex 26.930.3930.0: the deepest file is 246
+        # characters long under a 78 character WindowsApps prefix. With the
+        # default %LOCALAPPDATA%\Programs destination and Windows' default
+        # (long paths off) the staged copy has to stay below MAX_PATH.
+        source = Path(
+            "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.930.3930.0_x64__2p2nqsd0c76g0\\app"
+        )
+        destination = Path(
+            "C:\\Users\\someone\\AppData\\Local\\Programs\\Codex Subscription Router"
+        )
+        self.assertEqual(len(str(source)), 78)
+        win.require_long_path_support(
+            PureWindowsPath(source), PureWindowsPath(win.staging_shape(PureWindowsPath(destination))), 246, False
+        )
+
+    def test_file_sha256_streams_in_chunks(self):
+        path = Path(tempfile.mkdtemp()) / "app.asar"
+        data = b"asar" * (1024 * 1024 + 7)
+        path.write_bytes(data)
+        self.assertEqual(win.file_sha256(path), hashlib.sha256(data).hexdigest())
 
 
 class CommandCompositionTests(unittest.TestCase):
@@ -901,7 +1213,7 @@ class SwapIntoPlaceTests(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp())
         programs = self.root / "Local" / "Programs"
         self.destination = programs / "Codex Subscription Router"
-        self.stage = programs / ".codex-subscription-router-xxxxxxxx" / "Codex Subscription Router"
+        self.stage = programs / ".csr-xxxxxxxx" / "app"
         self.backup_directory = self.root / ".codex-mux" / "backups" / "20260101-000000"
         self.app_backup = self.backup_directory / self.destination.name
         make_app(self.stage, "ChatGPT.exe", "Codex Subscription Router.exe")
@@ -1053,11 +1365,9 @@ class SourceSideLayoutTests(unittest.TestCase):
         nested = source / "resources" / "app.asar.unpacked" / "node_modules" / "@openai" / "codex" / "bin"
         nested.mkdir(parents=True)
         (nested / "codex.exe").write_bytes(b"MZ codex")
-        copy = root / "Local" / "Programs" / ".codex-subscription-router-xxxxxxxx" / "Codex Subscription Router"
+        copy = root / "Local" / "Programs" / ".csr-xxxxxxxx" / "app"
         shutil.copytree(source, copy, symlinks=False)
 
-        self.assertEqual(win.unpack_globs(source), "node_modules/{@openai,better-sqlite3,node-pty}")
-        self.assertEqual(win.unpack_globs(source), win.unpack_globs(copy))
         for override in (None, "resources/app.asar.unpacked/node_modules/@openai/codex/bin/codex.exe"):
             with self.subTest(override=override):
                 source_codex = win.locate_codex_executable(source, override)
@@ -1070,6 +1380,24 @@ class SourceSideLayoutTests(unittest.TestCase):
 
 
 # --- hermetic orchestration of patch_app() -----------------------------------
+
+# What the fake `asar list --is-pack` prints for the orchestration tests: node-pty
+# unpacked as a directory, one loose native file inside a packed package.
+PACKAGE_LISTING = (
+    "pack   : /.vite\n"
+    "pack   : /.vite/build\n"
+    "pack   : /.vite/build/main-a.js\n"
+    "pack   : /node_modules\n"
+    "pack   : /node_modules/node-pty\n"
+    "unpack : /node_modules/node-pty/build\n"
+    "unpack : /node_modules/node-pty/build/Release\n"
+    "unpack : /node_modules/node-pty/build/Release/pty.node\n"
+    "pack   : /node_modules/@openai\n"
+    "pack   : /node_modules/@openai/native\n"
+    "unpack : /node_modules/@openai/native/helper.node\n"
+)
+EXPECTED_UNPACK = "helper.node"
+EXPECTED_UNPACK_DIR = "node_modules/node-pty/build"
 
 BOOTSTRAP_BUNDLE = (
     "Xe.app.setPath(`userData`,Qt({appDataPath:Xe.app.getPath(`appData`),"
@@ -1106,6 +1434,7 @@ class FakeTools:
         self.subprocess_runs: list = []
         self.builds: list = []
         self.packed_bundles: dict = {}
+        self.unpack = None
         self.unpack_dir = None
 
     def record(self, name, function):
@@ -1121,7 +1450,7 @@ class FakeTools:
 
     def asar_output(self, command):
         self.run_commands.append(command)
-        return LISTING
+        return PACKAGE_LISTING
 
     def run(self, command, *, cwd=None, env=None):
         self.run_commands.append(command)
@@ -1137,8 +1466,10 @@ class FakeTools:
                 entry.name: entry.read_text(encoding="utf-8")
                 for entry in (extracted / ".vite" / "build").iterdir()
             }
-            if command[3] == "--unpack-dir":
-                self.unpack_dir = command[4]
+            options = dict(zip(command[3:-2:2], command[4:-2:2]))
+            self.unpack = options.get("--unpack")
+            self.unpack_dir = options.get("--unpack-dir")
+            if options:
                 native = repacked.parent / "app.asar.unpacked" / "node_modules" / "node-pty"
                 native.mkdir(parents=True)
                 (native / "pty.node").write_bytes(b"repacked native")
@@ -1209,7 +1540,9 @@ class PatchAppOrchestrationTests(unittest.TestCase):
             "USERDOMAIN": "PC",
         }
 
-    def run_patch(self, *, force=False, create_shortcut=True, source=None, codex_executable=None):
+    def run_patch(
+        self, *, force=False, create_shortcut=True, source=None, codex_executable=None, store_candidates=()
+    ):
         tools = FakeTools()
         before = snapshot(self.source)
         out, err = io.StringIO(), io.StringIO()
@@ -1223,7 +1556,8 @@ class PatchAppOrchestrationTests(unittest.TestCase):
              mock.patch.object(win, "asar_output", tools.asar_output), \
              mock.patch.object(win, "node_executable", lambda: "node"), \
              mock.patch.object(win, "long_paths_enabled", tools.record("long_paths_enabled", lambda: True)), \
-             mock.patch.object(win, "unpack_globs", tools.record("unpack_globs", win.unpack_globs)), \
+             mock.patch.object(win, "store_install_candidates", lambda: list(store_candidates)), \
+             mock.patch.object(win, "unpack_patterns", tools.record("unpack_patterns", win.unpack_patterns)), \
              mock.patch.object(
                  win, "locate_codex_executable",
                  tools.record("locate_codex_executable", win.locate_codex_executable),
@@ -1259,7 +1593,8 @@ class PatchAppOrchestrationTests(unittest.TestCase):
         # State root: the token, hardened through icacls, nothing else unexpected.
         self.assertRegex((self.state_root / "control-token").read_text(encoding="utf-8"), r"^[0-9a-f]{64}$")
         self.assertEqual(
-            tools.run_commands[:2], win.icacls_commands(self.state_root, "PC\\me")
+            [command for command in tools.run_commands if command[0] == "icacls"],
+            win.icacls_commands(self.state_root, "PC\\me"),
         )
         # Builds: the mux into the temporary directory, the launcher into the stage.
         (mux_path, mux_package, mux_goos, _, _), (launcher_path, launcher_package, launcher_goos, _, launcher_ldflags) = tools.builds
@@ -1277,7 +1612,7 @@ class PatchAppOrchestrationTests(unittest.TestCase):
         self.assertIn("ui-test-bridge.cjs", tools.packed_bundles["main-a.js"])
         self.assertIn("ui-test-bridge.cjs", tools.packed_bundles)
         self.assertIn("disabled by Codex Subscription Router", tools.packed_bundles["x.js"])
-        self.assertEqual(tools.unpack_dir, "node_modules/{@openai,node-pty}")
+        self.assertEqual((tools.unpack, tools.unpack_dir), (EXPECTED_UNPACK, EXPECTED_UNPACK_DIR))
         token = (self.state_root / "control-token").read_text(encoding="utf-8")
         tools.patch_renderer.assert_called_once()
         self.assertEqual(tools.patch_renderer.call_args.args[1], token)
@@ -1301,14 +1636,14 @@ class PatchAppOrchestrationTests(unittest.TestCase):
 
     def assert_source_checks_ran_before_the_copy(self, tools):
         names = [name for name, _ in tools.events]
-        for check in ("unpack_globs", "locate_codex_executable", "asar_command"):
+        for check in ("unpack_patterns", "locate_codex_executable", "asar_command"):
             self.assertLess(names.index(check), names.index("exe-info"), names)
             self.assertLess(names.index(check), names.index("build"), names)
         self.assertLess(names.index("asar_command"), names.index("exe-info"), names)
-        self.assertEqual(names.count("unpack_globs"), 1)
+        self.assertEqual(names.count("unpack_patterns"), 1)
         self.assertEqual(names.count("locate_codex_executable"), 1)
         arguments = dict(tools.events)
-        self.assertEqual(arguments["unpack_globs"], self.source)
+        self.assertEqual(arguments["unpack_patterns"], PACKAGE_LISTING)
         self.assertEqual(arguments["locate_codex_executable"], self.source)
 
     def test_first_install_discovers_the_source_and_creates_the_shortcut(self):
@@ -1377,6 +1712,57 @@ class PatchAppOrchestrationTests(unittest.TestCase):
         tools = self.run_patch(source=other, codex_executable=self.codex_relative.as_posix())
         self.assert_installed(tools)
         self.assert_source_checks_ran_before_the_copy(tools)
+
+    def store_package(self) -> Path:
+        """A Microsoft Store package laid out like OpenAI.Codex: manifest + app."""
+        package = self.root / "Program Files" / "WindowsApps" / "OpenAI.Codex_26.930.3930.0_x64__a"
+        app = make_app(
+            package / "app",
+            "ChatGPT.exe",
+            "chrome_proxy.exe",
+            "elevation_service.exe",
+            "Codex.exe",
+            unpacked={"@openai": {}, "node-pty": {}},
+        )
+        (app / "resources" / "app.asar").write_bytes(b"official asar")
+        (app / "resources" / "codex.exe").write_bytes(b"MZ official codex")
+        (package / "AppxManifest.xml").write_bytes(
+            STORE_MANIFEST.format(main="app/ChatGPT.exe").encode("utf-8")
+        )
+        return app
+
+    def test_store_package_is_copied_read_only_with_manifest_host_and_resources_engine(self):
+        app = self.store_package()
+        self.source = app
+        self.codex_relative = Path("resources") / "codex.exe"
+        # Explicit --source, so the unrelated install under Programs\ChatGPT
+        # is not a second candidate.
+        tools = self.run_patch(source=app)
+        self.assert_installed(tools)
+        self.assertIn("Microsoft Store (MSIX) install", tools.stdout)
+        # Several top-level executables, no --electron-executable needed: the
+        # manifest named the host, and the launcher embeds that name.
+        self.assertEqual(tools.builds[1][4], win.launcher_ldflags("ChatGPT.exe"))
+        # The same-named 20 KB stub beside the host is carried over, not swapped.
+        self.assertEqual((self.destination / "Codex.exe").read_bytes(), b"MZ")
+        self.assertEqual((self.destination / "chrome_proxy.exe").read_bytes(), b"MZ")
+        # run_patch already asserted the package directory itself is byte-identical.
+        self.assertTrue((app.parent / "AppxManifest.xml").is_file())
+
+    def test_store_package_is_discovered_through_the_registry_lookup(self):
+        app = self.store_package()
+        self.source = app
+        self.codex_relative = Path("resources") / "codex.exe"
+        shutil.rmtree(self.local / "Programs" / "ChatGPT")
+        tools = self.run_patch(store_candidates=[app])
+        self.assertIn(f"Source install: {app.resolve()}", tools.stdout)
+        self.assertIn("Microsoft Store (MSIX) install", tools.stdout)
+        self.assertEqual(
+            (self.destination / "resources" / "codex.exe").read_bytes(), b"MZ built ./cmd/codex-mux"
+        )
+        self.assertEqual(
+            (self.destination / "resources" / "codex.real.exe").read_bytes(), b"MZ official codex"
+        )
 
 
 if __name__ == "__main__":

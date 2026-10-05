@@ -76,6 +76,17 @@ class ChunkedUsageStateTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             patch_app.patch_chunked_usage_state(self.MODAL.replace("onResetCredit:b", "newResetHandler:b"))
 
+    def test_memo_cache_may_have_any_name_but_must_stay_one_identifier(self):
+        # Windows build 12947 names the compiler's cache array `n`, not `t`.
+        renamed = self.MODAL.replace("t[", "n[").replace("let t=", "let n=")
+        patched = patch_app.patch_chunked_usage_state(renamed)
+        self.assertIn("window.__codexMuxResetAccountId??`primary`", patched)
+        self.assertNotIn("x=n[18]", patched)
+        # A different array in the second half is not the same cache.
+        mixed = self.MODAL.replace("t[12]=r", "q[12]=r")
+        with self.assertRaises(RuntimeError):
+            patch_app.patch_chunked_usage_state(mixed)
+
 
 class SigningTeamTests(unittest.TestCase):
     def resolve(self, identity, metadata=("true", "TEAMID5678")):

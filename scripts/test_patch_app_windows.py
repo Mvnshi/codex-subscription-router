@@ -800,6 +800,74 @@ class ProtocolSchemeTests(unittest.TestCase):
                 self.assertEqual(bundle.read_text(encoding="utf-8"), lookalike)
 
 
+class TrayIdentityTests(unittest.TestCase):
+    PROD = "e5768d8b-6936-4f45-b1ad-4c5fb414cb35"
+    BETA = "758400cf-36c7-43be-9335-6354d603be3a"
+    # The shape of the real bundle: one function mapping each build flavour to its GUID.
+    FLAVOURS = (
+        "function bQe(e){switch(e){case d.t.Agent:case d.t.Dev:return;"
+        "case d.t.Nightly:return`c4c933ff-16f4-47c7-a231-29e6bb84dccc`;"
+        "case d.t.InternalAlpha:return`c4607cac-3138-48bd-8b2a-5bc99d08e393`;"
+        "case d.t.PublicBeta:return`758400cf-36c7-43be-9335-6354d603be3a`;"
+        "case d.t.Prod:return`e5768d8b-6936-4f45-b1ad-4c5fb414cb35`}}"
+    )
+
+    def bundle(self, text: str, newline: str = "\n") -> tuple[Path, Path]:
+        extracted = Path(tempfile.mkdtemp()) / "asar"
+        build = extracted / ".vite" / "build"
+        build.mkdir(parents=True)
+        path = build / "main-a.js"
+        path.write_bytes(text.replace("\n", newline).encode("utf-8"))
+        return extracted, path
+
+    def test_every_known_guid_gets_its_own_stable_replacement(self):
+        extracted, path = self.bundle(self.FLAVOURS)
+        self.assertEqual(win.retarget_tray_identity(extracted), 4)
+        patched = path.read_text(encoding="utf-8")
+        for guid in win.KNOWN_TRAY_GUIDS:
+            self.assertNotIn(guid, patched)
+            self.assertIn(win.router_tray_guid(guid), patched)
+        replacements = [win.router_tray_guid(guid) for guid in win.KNOWN_TRAY_GUIDS]
+        self.assertEqual(len(set(replacements)), 4)
+        for replacement in replacements:
+            self.assertRegex(replacement, r"^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+        # Stable: the same input always maps to the same GUID, or the icon would
+        # change identity on every rebuild.
+        self.assertEqual(win.router_tray_guid(self.PROD), win.router_tray_guid(self.PROD))
+
+    def test_only_the_guid_changes_and_newlines_are_preserved_byte_for_byte(self):
+        text = "a\nb`" + self.PROD + "`\nc\n"
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=repr(newline)):
+                extracted, path = self.bundle(text, newline)
+                before = path.read_bytes()
+                win.retarget_tray_identity(extracted)
+                after = path.read_bytes()
+                self.assertEqual(
+                    after, before.replace(self.PROD.encode(), win.router_tray_guid(self.PROD).encode())
+                )
+
+    def test_no_known_guid_is_not_an_error_and_writes_nothing(self):
+        extracted, path = self.bundle("const x=`not a tray guid`;")
+        before = path.stat().st_mtime_ns
+        self.assertEqual(win.retarget_tray_identity(extracted), 0)
+        self.assertEqual(path.stat().st_mtime_ns, before)
+
+    def test_a_repeated_guid_fails_closed_and_leaves_the_bundle_untouched(self):
+        text = f"a`{self.PROD}`b`{self.PROD}`"
+        extracted, path = self.bundle(text)
+        with self.assertRaises(RuntimeError) as caught:
+            win.retarget_tray_identity(extracted)
+        self.assertIn("main-a.js", str(caught.exception))
+        self.assertEqual(path.read_text(encoding="utf-8"), text)
+
+    def test_a_guid_split_across_bundles_is_counted_per_bundle(self):
+        extracted, first = self.bundle(f"`{self.PROD}`")
+        second = first.with_name("other.js")
+        second.write_text(f"`{self.BETA}`", encoding="utf-8")
+        self.assertEqual(win.retarget_tray_identity(extracted), 2)
+
+
 class LongPathTests(unittest.TestCase):
     def test_longest_path_length(self):
         root = Path(tempfile.mkdtemp()) / "app"
@@ -1409,7 +1477,8 @@ UPDATER_BUNDLE = (
     "(this.updaterInitialization??=this.initializeUpdaterOnce(),"
     "this.updaterInitialization):Promise.resolve()}"
 )
-MAIN_BUNDLE = "e.app.setAsDefaultProtocolClient(`codex`);"
+OFFICIAL_TRAY_GUID = "e5768d8b-6936-4f45-b1ad-4c5fb414cb35"
+MAIN_BUNDLE = "e.app.setAsDefaultProtocolClient(`codex`);case d.t.Prod:return`" + OFFICIAL_TRAY_GUID + "`}}"
 REPACKED_HEADER = json.dumps({"files": {".vite": {"files": {}}}}).encode("utf-8")
 # asar_header_digest reads the fourth little-endian uint32 as the header length
 # and hashes that many following bytes; the other fields are pickle sizes.
@@ -1611,6 +1680,10 @@ class PatchAppOrchestrationTests(unittest.TestCase):
         self.assertIn("setAsDefaultProtocolClient(`codex-subscription-router`)", tools.packed_bundles["main-a.js"])
         self.assertIn("ui-test-bridge.cjs", tools.packed_bundles["main-a.js"])
         self.assertIn("ui-test-bridge.cjs", tools.packed_bundles)
+        # The copy gets its own tray identity; the official GUID would give it no icon.
+        self.assertNotIn(OFFICIAL_TRAY_GUID, tools.packed_bundles["main-a.js"])
+        self.assertIn(win.router_tray_guid(OFFICIAL_TRAY_GUID), tools.packed_bundles["main-a.js"])
+        self.assertIn("Gave the copy its own tray-icon identity (1 GUID(s))", tools.stdout)
         self.assertIn("disabled by Codex Subscription Router", tools.packed_bundles["x.js"])
         self.assertEqual((tools.unpack, tools.unpack_dir), (EXPECTED_UNPACK, EXPECTED_UNPACK_DIR))
         token = (self.state_root / "control-token").read_text(encoding="utf-8")

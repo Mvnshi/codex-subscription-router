@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Create an independent, profile-isolated copy of the official ChatGPT desktop app for Windows with Codex multiplexing.
 
-PROVISIONAL. No official Windows build of the ChatGPT/Codex desktop app has
-been exercised with this patcher yet: TESTED_WINDOWS_SOURCE_BUILDS is empty,
-so every run needs --allow-untested-source until a build has been verified.
-Every assumption about the Windows layout (where the install lives, which
-executable is the Electron host, where the bundled codex.exe sits, which
-node_modules stay unpacked, whether the executable carries an embedded asar
-integrity resource) is checked at run time with exact, fail-closed checks
-rather than assumed, and the checks and their outcomes are recorded in
-docs/WINDOWS.md.
+PROVISIONAL. One build of the official app has been exercised with this patcher,
+the Microsoft Store package OpenAI.Codex 26.930.3930.0 (see
+TESTED_WINDOWS_SOURCE_BUILDS and docs/COMPATIBILITY.md for what it has and has
+not passed); any other build needs --allow-untested-source. The official app is
+only ever distributed through the Microsoft Store, so a Store package is the
+normal source: it is found through the package registry and its app directory is
+copied read-only. Every assumption about the Windows layout (where the install
+lives, which executable is the host, where the bundled codex.exe sits, which
+files stay unpacked, whether the executable carries an embedded asar integrity
+resource) is checked at run time with exact, fail-closed checks rather than
+assumed, and the checks and their outcomes are recorded in docs/WINDOWS.md.
 
 Differences from the macOS patcher (scripts/patch_app.py), on purpose:
 - Nothing is code-signed. Windows has no codesign step; rewriting the
@@ -17,8 +19,8 @@ Differences from the macOS patcher (scripts/patch_app.py), on purpose:
   its Authenticode signature, so the copy runs unsigned (SmartScreen may
   warn once).
 - Computer Use identity is not patched and the managed Computer Use service
-  is not pinned: the Swift helper is macOS-only and no Windows helper has
-  been verified. The copy is pointed at a named pipe the official app never
+  is not pinned: the package ships a Windows helper that the copy starts, but
+  none has been verified here. The copy is pointed at a named pipe the official app never
   uses (a fixed prefix plus a fresh UUID per launch) so the two builds cannot
   share a helper by accident and no other local account can pre-create it.
 - The launcher is a Go program (cmd/codex-router-launcher) built as
@@ -42,8 +44,10 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path, PureWindowsPath
+from typing import NamedTuple
+from xml.etree import ElementTree
 
 # The module is both a script (python scripts\patch_app_windows.py) and an
 # import target for the tests, which discover from the scripts directory.
@@ -87,9 +91,17 @@ PATH_LENGTH_MARGIN = 8
 # volumes. Python maps it to errno.EXDEV as well; move_directory checks both
 # so the fallback does not hinge on that mapping.
 ERROR_NOT_SAME_DEVICE = 17
-# tempfile.mkdtemp appends eight random characters to the prefix.
-STAGING_PREFIX = ".codex-subscription-router-"
+# tempfile.mkdtemp appends eight random characters to the prefix. Both names are
+# deliberately short: the staged copy of the official app is the longest tree the
+# install writes, and the default Windows configuration has long paths off
+# (MAX_PATH 260), so every character here counts against the app's deepest paths.
+STAGING_PREFIX = ".csr-"
 STAGING_RANDOM_LENGTH = 8
+STAGING_DIRECTORY_NAME = "app"
+# AppxManifest.xml Identity Name of the official Microsoft Store package. The
+# Store build is the only way OpenAI ships the Windows desktop app.
+STORE_PACKAGE_NAME = "OpenAI.Codex"
+STORE_MANIFEST_NAME = "AppxManifest.xml"
 EXE_INFO_SCRIPT = shared.PROJECT_ROOT / "scripts" / "win" / "exe-info.mjs"
 SET_ASAR_INTEGRITY_SCRIPT = (
     shared.PROJECT_ROOT / "scripts" / "win" / "set-asar-integrity.mjs"
@@ -98,12 +110,22 @@ ASAR_CLI = (
     shared.PROJECT_ROOT / "node_modules" / "@electron" / "asar" / "bin" / "asar.mjs"
 )
 
-# Keyed by (versionInfo.productVersion, versionInfo.fileVersion) of the
-# Electron executable -> sha256 of the whole app.asar, mirroring
-# patch_app.TESTED_SOURCE_BUILDS. Deliberately empty: no Windows build has
-# been exercised, so nothing here is verified, and --allow-untested-source is
-# required until the first entry lands together with its anchor review.
-TESTED_WINDOWS_SOURCE_BUILDS: dict[tuple[str, str], str] = {}
+# Keyed by (versionInfo.productVersion, versionInfo.fileVersion) of the host
+# executable -> sha256 (or a tuple of sha256 values) of the whole app.asar,
+# mirroring patch_app.TESTED_SOURCE_BUILDS. On the Store build the host is
+# Chromium's chrome.exe launcher, so the key is the Chromium runtime version,
+# which several app builds can share; the app.asar hash is the real identity,
+# hence more than one hash per key is allowed.
+#
+# Every entry is PROVISIONAL until docs/SMOKE-TEST.md has been completed in
+# full on it; docs/COMPATIBILITY.md says what each one has actually passed.
+TESTED_WINDOWS_SOURCE_BUILDS: dict[tuple[str, str], str | tuple[str, ...]] = {
+    # OpenAI.Codex 26.930.3930.0 (Microsoft Store, x64): app 26.930.31730,
+    # build 12947, Chromium 154.0.8037.98.
+    ("154.0.8037.98", "154.0.8037.98"): (
+        "af98213984ec4556778ef9276193d51460153fb9b30fded882d503637b84abba"
+    ),
+}
 
 # Top-level executables that are never the Electron host: Squirrel's
 # uninstaller/updater stubs and NSIS uninstallers. Matched case-insensitively
@@ -139,6 +161,19 @@ PROTOCOL_CALL_PATTERN = re.compile(
 # reads, so those two are not registrations and are left to the warning.
 PROTOCOL_REGISTRATION_RESIDUE_PATTERN = re.compile(
     r"\bsetAsDefaultProtocolClient\b(?!\((['\"`])" + re.escape(PROTOCOL_SCHEME) + r"\1)"
+)
+# The Store build declares codex:// in its package manifest and its own
+# run-time registration returns early on Windows:
+#   function w(){if(process.platform===`win32`)return;let t=Q7(e.isPackaged);
+#   try{e.setAsDefaultProtocolClient(t)||...}
+# That one call is unreachable on win32, so it cannot write HKCU\Software\Classes
+# and needs no retargeting. Only this exact shape is accepted (the platform
+# guard must be the first statement before the scheme is computed and the call
+# is made); every other residue still stops the patch.
+WINDOWS_UNREACHABLE_REGISTRATION_PATTERN = re.compile(
+    r"if\(process\.platform===(['\"`])win32\1\)return;"
+    r"let ([\w$]+)=[\w$]+\([\w$]+\.isPackaged\);"
+    r"try\{[\w$]+\.setAsDefaultProtocolClient\(\2\)"
 )
 
 
@@ -272,35 +307,101 @@ def electron_executables(path: Path) -> list[Path]:
     )
 
 
-def refuse_store_install(path: Path) -> None:
-    # MSIX/Store packages under WindowsApps are ACL-locked and their
-    # executables only start inside the package identity; a copy would neither
-    # read completely nor launch.
-    if any(part.lower() == "windowsapps" for part in path.parts):
-        raise RuntimeError(
-            f"{path} is a Microsoft Store/MSIX install; Store/MSIX installs cannot be "
-            "copied. Install the ChatGPT desktop app from the downloadable installer "
-            "and pass --source if it is not discovered"
+def is_store_install(path: Path) -> bool:
+    """True for an install inside a Microsoft Store/MSIX package (WindowsApps)."""
+    return any(part.lower() == "windowsapps" for part in path.parts)
+
+
+def version_key(text: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", text))
+
+
+def store_install_candidates() -> list[Path]:
+    """The app directory of the newest installed Store package, as a list.
+
+    OpenAI ships the Windows desktop app only through the Microsoft Store, as
+    the MSIX package OpenAI.Codex. Its files sit under
+    %ProgramFiles%\\WindowsApps, a directory a standard user can read file by
+    file but cannot enumerate, so the package registry is asked where it lives
+    (no elevation needed). The package's own executable and resources are in its
+    "app" subdirectory. A failed lookup means there is no Store candidate, not
+    an error: other installs are still discovered.
+    """
+    script = (
+        f"Get-AppxPackage -Name {powershell_literal(STORE_PACKAGE_NAME)} | "
+        "ForEach-Object { $_.Version.ToString() + '|' + $_.InstallLocation }"
+    )
+    try:
+        result = run_helper(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            "package lookup (Get-AppxPackage)",
+            errors="replace",
         )
+    except (RuntimeError, OSError):
+        return []
+    packages = []
+    for line in result.stdout.splitlines():
+        version, separator, location = line.strip().partition("|")
+        if separator and location:
+            packages.append((version_key(version), Path(location) / "app"))
+    packages.sort(key=lambda entry: entry[0], reverse=True)
+    return [directory for _, directory in packages[:1]]
 
 
-def discover_source(env: Mapping[str, str], explicit: Path | None) -> Path:
+def manifest_executable_name(app_dir: Path) -> str | None:
+    """The host executable the Store manifest declares for the main application.
+
+    The package manifest sits beside the app directory and names the first
+    Application's Executable (app/ChatGPT.exe), which is exact where guessing
+    among the Chromium helper executables beside it (chrome_proxy.exe,
+    elevation_service.exe, ...) is not. Anything unexpected returns None and the
+    caller falls back to discovery.
+    """
+    manifest = app_dir.parent / STORE_MANIFEST_NAME
+    if not manifest.is_file():
+        return None
+    try:
+        root = ElementTree.parse(manifest).getroot()
+    except (ElementTree.ParseError, OSError):
+        return None
+    for element in root.iter():
+        if element.tag.rsplit("}", 1)[-1] != "Application":
+            continue
+        declared = element.get("Executable")
+        if not declared:
+            return None
+        target = app_dir.parent / PureWindowsPath(declared.replace("/", "\\"))
+        if target.parent != app_dir:
+            return None
+        return target.name
+    return None
+
+
+def discover_source(
+    env: Mapping[str, str],
+    explicit: Path | None,
+    store_candidates: Sequence[Path] = (),
+) -> Path:
     if explicit is not None:
-        refuse_store_install(explicit)
         if not is_electron_app_directory(explicit):
             raise RuntimeError(
                 f"not an Electron app directory (no resources\\app.asar): {explicit}"
             )
         return explicit
-    examined = candidate_source_directories(env)
+    examined = [*candidate_source_directories(env), *store_candidates]
     qualifying = [candidate for candidate in examined if is_electron_app_directory(candidate)]
     if len(qualifying) != 1:
         examined_text = ", ".join(str(candidate) for candidate in examined) or "(none)"
+        hint = (
+            ". Install the ChatGPT/Codex desktop app from the Microsoft Store first, "
+            "then rerun; or pass --source"
+            if not qualifying
+            else "; pass --source"
+        )
         raise RuntimeError(
             f"expected exactly one official install, found {len(qualifying)} "
-            f"(examined: {examined_text}); pass --source"
+            f"(examined: {examined_text}){hint}"
         )
-    refuse_store_install(qualifying[0])
     return qualifying[0]
 
 
@@ -318,6 +419,9 @@ def select_electron_executable(app_dir: Path, override: str | None) -> Path:
         if not candidate.is_file():
             raise RuntimeError(f"Electron executable not found: {candidate}")
         return candidate
+    declared = manifest_executable_name(app_dir)
+    if declared is not None and (app_dir / declared).is_file():
+        return app_dir / declared
     executables = electron_executables(app_dir)
     if len(executables) != 1:
         names = ", ".join(entry.name for entry in executables) or "(none)"
@@ -367,6 +471,17 @@ def locate_codex_executable(app_dir: Path, override: str | None) -> Path:
         and entry.name.lower() == CODEX_EXECUTABLE_NAME
         and entry.name.lower() not in excluded
     )
+    if len(matches) > 1:
+        # The engine lives under resources; a same-named file beside the host
+        # executable (the Store package ships a 20 KB Codex.exe stub there) is
+        # not it. Narrow only when that leaves exactly one.
+        in_resources = [
+            entry
+            for entry in matches
+            if entry.relative_to(app_dir).parts[0].lower() == "resources"
+        ]
+        if len(in_resources) == 1:
+            matches = in_resources
     if len(matches) != 1:
         found = ", ".join(str(entry.relative_to(app_dir)) for entry in matches) or "(none)"
         raise RuntimeError(
@@ -376,34 +491,73 @@ def locate_codex_executable(app_dir: Path, override: str | None) -> Path:
     return matches[0]
 
 
-def unpack_globs(app_dir: Path) -> str | None:
-    """Derive the --unpack-dir pattern from the official app.asar.unpacked tree.
+class UnpackPatterns(NamedTuple):
+    """The asar pack options that reproduce the official unpacked set."""
 
-    The macOS patcher hard-codes its native module list; the Windows layout is
-    unknown, so the packages the official build left unpacked are read from
-    disk. Only node_modules packages are understood; anything else fails
-    closed rather than being repacked into the archive, where native .node
-    files and spawned helpers cannot be loaded from.
-    """
-    unpacked = app_dir / "resources" / "app.asar.unpacked"
-    if not unpacked.is_dir():
+    # asar pack --unpack: loose files, matched by base name (matchBase).
+    unpack: str | None
+    # asar pack --unpack-dir: directories kept unpacked with everything in them.
+    unpack_dir: str | None
+
+
+# Characters minimatch would interpret (or that would split a brace group); an
+# unpacked path containing one cannot be handed to asar as a literal pattern.
+PATTERN_SPECIAL_CHARACTERS = re.compile(r"[{}\[\]()*?!|,\\]")
+
+
+def brace_pattern(alternatives: list[str]) -> str | None:
+    if not alternatives:
         return None
-    others = sorted(entry.name for entry in unpacked.iterdir() if entry.name != "node_modules")
-    if others:
-        raise RuntimeError(
-            "app.asar.unpacked contains entries other than node_modules, which this "
-            f"patcher does not know how to keep unpacked: {', '.join(others)}"
-        )
-    node_modules = unpacked / "node_modules"
-    if not node_modules.is_dir():
-        raise RuntimeError("app.asar.unpacked has no node_modules directory")
-    names = sorted(entry.name for entry in node_modules.iterdir() if entry.is_dir())
-    if not names:
-        raise RuntimeError("app.asar.unpacked/node_modules contains no packages")
-    if len(names) == 1:
+    if len(alternatives) == 1:
         # minimatch does not expand a single-alternative brace group.
-        return f"node_modules/{names[0]}"
-    return "node_modules/{" + ",".join(names) + "}"
+        return alternatives[0]
+    return "{" + ",".join(alternatives) + "}"
+
+
+def unpack_patterns(listing_text: str) -> UnpackPatterns:
+    """Derive asar's pack options from the official `asar list --is-pack` output.
+
+    The official archive keeps a precise set unpacked: whole directories
+    (better-sqlite3's build and lib, node-pty's build and lib) and a few loose
+    native files whose directories stay packed (a nested package's .node
+    binaries). Unpacking whole top-level packages instead would also unpack
+    every packed file inside them, including deeply nested JavaScript, and the
+    resulting directory paths exceed what Windows allows with long paths off.
+    The top-most unpacked directories become --unpack-dir patterns, the
+    remaining unpacked files become --unpack patterns by base name (a path
+    pattern would have to survive minimatch's rule that "**" does not cross the
+    dot-directory the staging copy lives in); verify_unpacked_identical then
+    proves the repacked archive matches the official set exactly.
+    """
+    all_paths, unpacked = parse_asar_listing(listing_text)
+    parents = {path.rpartition("/")[0] for path in all_paths}
+    unpacked_directories = {path for path in unpacked if path in parents}
+
+    def inside_unpacked_directory(path: str) -> bool:
+        parent = path.rpartition("/")[0]
+        while parent:
+            if parent in unpacked_directories:
+                return True
+            parent = parent.rpartition("/")[0]
+        return False
+
+    top_directories = sorted(
+        path for path in unpacked_directories if not inside_unpacked_directory(path)
+    )
+    loose_files = sorted(
+        path
+        for path in unpacked - unpacked_directories
+        if not inside_unpacked_directory(path)
+    )
+    directory_patterns = [path.lstrip("/") for path in top_directories]
+    file_patterns = sorted({path.rpartition("/")[2] for path in loose_files})
+    for pattern in (*directory_patterns, *file_patterns):
+        if PATTERN_SPECIAL_CHARACTERS.search(pattern):
+            raise RuntimeError(
+                "the official archive unpacks a path containing characters asar "
+                f"would treat as a pattern, which this patcher cannot reproduce: {pattern}"
+            )
+    return UnpackPatterns(brace_pattern(file_patterns), brace_pattern(directory_patterns))
 
 
 def parse_asar_listing(text: str) -> tuple[set[str], set[str]]:
@@ -431,8 +585,14 @@ def parse_asar_listing(text: str) -> tuple[set[str], set[str]]:
     return all_paths, unpacked
 
 
-def verify_unpacked_preserved(original_text: str, repacked_text: str) -> None:
-    """Every path the official archive kept unpacked must stay unpacked."""
+def verify_unpacked_identical(original_text: str, repacked_text: str) -> None:
+    """The repacked archive must keep exactly the official unpacked set.
+
+    A path that is no longer unpacked cannot be loaded (native modules and
+    spawned helpers must be real files). A path that became unpacked is also an
+    error: it lands on disk as a new file or directory the official layout
+    never had, and nested package trees can push it past Windows' path limit.
+    """
     _, original_unpacked = parse_asar_listing(original_text)
     _, repacked_unpacked = parse_asar_listing(repacked_text)
     for path in sorted(original_unpacked):
@@ -440,6 +600,12 @@ def verify_unpacked_preserved(original_text: str, repacked_text: str) -> None:
             raise RuntimeError(
                 f"repacked app.asar no longer keeps {path} unpacked; the unpack "
                 "pattern does not cover the official layout"
+            )
+    for path in sorted(repacked_unpacked):
+        if path not in original_unpacked:
+            raise RuntimeError(
+                f"repacked app.asar unpacks {path}, which the official archive keeps "
+                "packed; the unpack pattern is broader than the official layout"
             )
 
 
@@ -490,10 +656,11 @@ def source_identity(exe_info: dict, asar_sha256: str) -> SourceIdentity:
 
 
 def approve_source(identity: SourceIdentity, allow_untested: bool) -> None:
-    expected = TESTED_WINDOWS_SOURCE_BUILDS.get(
+    recorded = TESTED_WINDOWS_SOURCE_BUILDS.get(
         (identity.product_version, identity.file_version)
     )
-    if expected is not None and expected == identity.asar_sha256:
+    allowed = (recorded,) if isinstance(recorded, str) else tuple(recorded or ())
+    if identity.asar_sha256 in allowed:
         return
     if not allow_untested:
         raise RuntimeError(
@@ -504,6 +671,31 @@ def approve_source(identity: SourceIdentity, allow_untested: bool) -> None:
         "Warning: continuing with an untested official ChatGPT build; "
         "the patch will continue only while every expected anchor matches.",
         file=sys.stderr,
+    )
+
+
+def unreachable_registration_spans(bundle: str) -> list[tuple[int, int]]:
+    return [
+        match.span()
+        for match in WINDOWS_UNREACHABLE_REGISTRATION_PATTERN.finditer(bundle)
+    ]
+
+
+def unreachable_registration_residue(bundle: str) -> re.Match[str] | None:
+    """First setAsDefaultProtocolClient mention that is neither retargeted nor
+    inside a win32-guarded early-return shape (see the pattern's comment)."""
+    guarded = unreachable_registration_spans(bundle)
+    for match in PROTOCOL_REGISTRATION_RESIDUE_PATTERN.finditer(bundle):
+        if not any(start <= match.start() < end for start, end in guarded):
+            return match
+    return None
+
+
+def count_unreachable_registrations(extracted: Path) -> int:
+    """How many win32-guarded registrations the main-process bundles carry."""
+    return sum(
+        len(unreachable_registration_spans(path.read_text(encoding="utf-8")))
+        for path in (extracted / ".vite" / "build").glob("*.js")
     )
 
 
@@ -526,7 +718,8 @@ def retarget_protocol_scheme(extracted: Path) -> int:
         # not retargeted, and on Windows setAsDefaultProtocolClient writes
         # HKCU\Software\Classes\<scheme> to point at the copy without asking,
         # so the copy would silently take that scheme over at first launch.
-        if PROTOCOL_REGISTRATION_RESIDUE_PATTERN.search(bundle) is not None:
+        # A call inside the exact win32-guarded shape above never runs here.
+        if unreachable_registration_residue(bundle) is not None:
             raise RuntimeError(
                 f"{bundle_path.name} calls setAsDefaultProtocolClient with a scheme "
                 f"that is not the literal 'codex'; it was not retargeted and the copy "
@@ -570,14 +763,23 @@ def staging_shape(destination: Path) -> Path:
     """The longest path the install writes: the staging copy, not the destination.
 
     tempfile.TemporaryDirectory places the copy under
-    destination.parent/.codex-subscription-router-XXXXXXXX/<name> before the
-    final rename, so the path-length check must use that deeper location.
+    destination.parent/.csr-XXXXXXXX/app before the final rename, so the
+    path-length check must use that location rather than the destination.
     """
     return (
         destination.parent
         / (STAGING_PREFIX + "x" * STAGING_RANDOM_LENGTH)
-        / DESTINATION_DIRECTORY_NAME
+        / STAGING_DIRECTORY_NAME
     )
+
+
+def file_sha256(path: Path) -> str:
+    """Hash in chunks: the official app.asar is over half a gigabyte."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def node_executable() -> str:
@@ -931,7 +1133,16 @@ def patch_app(
             "scripts/patch_app_windows.py runs on Windows; the tests run anywhere"
         )
     env = os.environ
-    source = discover_source(env, source.expanduser() if source else None).resolve()
+    source = discover_source(
+        env,
+        source.expanduser() if source else None,
+        store_install_candidates() if source is None else (),
+    ).resolve()
+    if is_store_install(source):
+        print(
+            "Source is a Microsoft Store (MSIX) install; it is copied read-only and "
+            "the official package stays untouched."
+        )
     destination = (
         destination.expanduser() if destination else default_destination(env)
     ).resolve()
@@ -951,16 +1162,19 @@ def patch_app(
     # builds, so a layout this patcher does not understand stops the run in
     # seconds. The stage is a verbatim copy, so these results hold there too.
     ldflags = launcher_ldflags(electron_exe.name)
-    globs = unpack_globs(source)
     source_codex = locate_codex_executable(source, codex_executable)
     if source_codex.with_name(REAL_CODEX_EXECUTABLE_NAME).exists():
         raise RuntimeError(f"source app already contains {REAL_CODEX_EXECUTABLE_NAME}")
     for tool in ("go", "node", "npm"):
         shared.require_tool(tool)
     asar = asar_command()
-    info = exe_info(electron_exe)
     source_asar = source / "resources" / "app.asar"
-    source_asar_hash = hashlib.sha256(source_asar.read_bytes()).hexdigest()
+    # The official archive's own packed/unpacked flags decide how it is repacked;
+    # the stage is a verbatim copy, so the source's listing holds for it too.
+    original_listing = asar_output([*asar, "list", "--is-pack", str(source_asar)])
+    patterns = unpack_patterns(original_listing)
+    info = exe_info(electron_exe)
+    source_asar_hash = file_sha256(source_asar)
     identity = source_identity(info, source_asar_hash)
     print(
         f"Source {identity.product_name} version: {identity.product_version} "
@@ -985,7 +1199,7 @@ def patch_app(
 
     with tempfile.TemporaryDirectory(prefix=STAGING_PREFIX, dir=destination.parent) as temporary:
         temporary_path = Path(temporary)
-        stage = temporary_path / DESTINATION_DIRECTORY_NAME
+        stage = temporary_path / STAGING_DIRECTORY_NAME
         extracted = temporary_path / "asar"
         mux = temporary_path / CODEX_EXECUTABLE_NAME
 
@@ -1004,12 +1218,17 @@ def patch_app(
         resources = stage / "resources"
         original_asar = resources / "app.asar"
         print("Patching desktop profile and renderer…")
-        original_listing = asar_output([*asar, "list", "--is-pack", str(original_asar)])
         shared.run([*asar, "extract", str(original_asar), str(extracted)])
         shared.isolate_desktop_profile(extracted, windows_desktop_profile_prelude())
         shared.install_ui_test_bridge(extracted)
         protocol_replacements = retarget_protocol_scheme(extracted)
-        if protocol_replacements == 0:
+        guarded_registrations = count_unreachable_registrations(extracted)
+        if protocol_replacements == 0 and guarded_registrations:
+            print(
+                f"Protocol registration is skipped on Windows by the app itself "
+                f"({guarded_registrations} guarded call(s)); nothing to retarget."
+            )
+        elif protocol_replacements == 0:
             # Only reachable when no setAsDefaultProtocolClient call exists at
             # all (a registration the installer performs, say); a call with a
             # non-literal scheme has already stopped the patch above.
@@ -1025,14 +1244,16 @@ def patch_app(
 
         repacked_asar = temporary_path / "app.asar"
         pack_command = [*asar, "pack"]
-        if globs is not None:
-            pack_command.extend(("--unpack-dir", globs))
+        if patterns.unpack is not None:
+            pack_command.extend(("--unpack", patterns.unpack))
+        if patterns.unpack_dir is not None:
+            pack_command.extend(("--unpack-dir", patterns.unpack_dir))
         shared.run([*pack_command, str(extracted), str(repacked_asar)])
         repacked_listing = asar_output([*asar, "list", "--is-pack", str(repacked_asar)])
-        verify_unpacked_preserved(original_listing, repacked_listing)
+        verify_unpacked_identical(original_listing, repacked_listing)
         shutil.copy2(repacked_asar, original_asar)
         repacked_unpacked = temporary_path / "app.asar.unpacked"
-        if globs is None:
+        if patterns == UnpackPatterns(None, None):
             if repacked_unpacked.exists():
                 raise RuntimeError("ASAR pack produced an unpacked tree without a pattern")
         else:

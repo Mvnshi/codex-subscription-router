@@ -18,8 +18,10 @@ routing and failover have not been exercised on it. See
 launches, and passes account/usage/profile/plugin screens, routing on three
 accounts, failover and history-preserving account moves. Native desktop clicks,
 keyboard input and real reset redemption through the account API also passed. See
-[the 12246 port notes](docs/BUILD-12246-PORT.md). A Windows port exists, but no
-official Windows build has been exercised with it yet; see
+[the 12246 port notes](docs/BUILD-12246-PORT.md). The Windows port supports the
+Microsoft Store build `26.930.3930.0` (app build `12947`), provisionally: it
+patches, launches beside the official app, and loads connected accounts, but
+routing and failover have not been exercised on Windows yet. See
 [the Windows port notes](docs/WINDOWS.md).
 
 ![Multi-subscription account menu](screenshots/account-menu.png)
@@ -97,9 +99,9 @@ Codex Subscription Router currently targets:
 | Component | Supported value |
 | --- | --- |
 | Platform: macOS | Apple silicon, tested against the builds below |
-| Platform: Windows | x64 and arm64, **provisional**: no official Windows build has been exercised yet; every anchor is checked at run time and `--allow-untested-source` is required until a build is recorded |
+| Platform: Windows | x64, **provisional**: tested against the Microsoft Store build below; every anchor is checked at run time and any other build needs `--allow-untested-source`. arm64 is untested |
 | Official ChatGPT versions (macOS) | `26.803.61601` (build `6396`), `26.810.52044` (build `6662`), `26.901.22334` (build `7746`), `26.901.51231` (build `8109`), `26.928.20755` (build `12246`, provisional) |
-| Official ChatGPT versions (Windows) | none recorded yet |
+| Official ChatGPT versions (Windows) | `OpenAI.Codex` `26.930.3930.0` from the Microsoft Store (app `26.930.31730`, build `12947`, provisional) |
 | Go | 1.26 or newer |
 | Node.js | 22.12 or newer |
 | Python | 3 on macOS; 3.11 or newer on Windows |
@@ -126,19 +128,21 @@ Use permissions. Ad-hoc signing is intended only for diagnostics.
 
 ### Windows
 
-- 64-bit Windows (x64 or ARM64)
-- The official ChatGPT/Codex desktop app installed per user from the
-  downloadable installer. Microsoft Store/MSIX installs are not supported;
-  they cannot be copied.
-- Go 1.26+
-- Node.js 22.12+ and npm
-- Python 3.11+
-- git
+- 64-bit Windows (x64 tested; ARM64 untested)
+- The official ChatGPT/Codex desktop app installed from the **Microsoft Store**
+  (the package `OpenAI.Codex`; OpenAI ships the Windows app only this way). The
+  patcher finds it through the package registry, reads its files and copies them
+  to a normal folder; the Store package itself is never modified.
+- Go 1.26+ (`winget install --id GoLang.Go -e`)
+- Node.js 22.12+ and npm (`winget install --id OpenJS.NodeJS.LTS -e`)
+- Python 3.11+ (`winget install --id Python.Python.3.12 -e`)
+- git (`winget install --id Git.Git -e`)
 
 No signing identity is needed; the copy runs unsigned (see
-[the security model](docs/SECURITY-MODEL.md)). If the official install has
-long paths, Windows long-path support (`LongPathsEnabled`) may be required;
-the patcher says so before copying anything.
+[the security model](docs/SECURITY-MODEL.md)). Windows' default configuration
+(long paths off) is enough: the copy is staged under a short directory name,
+and if a path would still be too long the patcher says so before copying
+anything.
 
 ## Install
 
@@ -212,11 +216,13 @@ Appshots and Computer Use may not function with an ad-hoc signature.
 ### Install on Windows
 
 > [!NOTE]
-> The Windows port is provisional. No official Windows build of the ChatGPT
-> desktop app has been exercised with it, so the patcher refuses every source
-> until `--allow-untested-source` is passed, and it checks every layout
-> assumption at run time instead of assuming it. Read
-> [the Windows port notes](docs/WINDOWS.md) first.
+> The Windows port is provisional. It is verified on the Microsoft Store build
+> `26.930.3930.0` (patches, launches next to the official app, runs the
+> multiplexer, shows and connects accounts); routing, failover and resets have
+> not yet been exercised on Windows. A different Store build is refused until
+> `--allow-untested-source` is passed, and every layout assumption is checked at
+> run time instead of assumed. Read [the Windows port notes](docs/WINDOWS.md)
+> first.
 
 Run one command in PowerShell (5.1 or 7) as a normal user, not as
 administrator. It downloads or updates the source, installs the locked build
@@ -226,9 +232,10 @@ dependencies, builds the independent copy, and launches it:
 irm https://raw.githubusercontent.com/Mvnshi/codex-subscription-router/main/install.ps1 | iex
 ```
 
-Until a Windows build is recorded as supported, the patcher stops with
-"the source version, build, or app.asar hash is not approved". Set the override
-in the same session first:
+If the Store has updated the app to a build that is not recorded yet, the
+patcher stops with "the source version, build, or app.asar hash is not
+approved". The anchors are still checked, so you can opt in by setting the
+override in the same session first:
 
 ```powershell
 $env:CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE = '1'
@@ -249,8 +256,10 @@ From a downloaded copy or a clone the same options are parameters:
 The installer refuses elevated sessions, checks git, Go 1.26+, Node.js 22.12+,
 npm, and Python 3.11+ (`python`, then `py -3`), stops the copy's processes and
 passes `--force` on an existing installation, and stops with a clear message
-instead of a partial installation when a check fails. It does not check for
-the official app itself; the patcher discovers and verifies that.
+instead of a partial installation when a check fails. When a tool is missing
+the message lists the `winget install` command for each one; open a new
+PowerShell window afterwards so `PATH` is refreshed. It does not check for the
+official app itself; the patcher discovers and verifies that.
 
 > [!TIP]
 > To inspect the installer before running it, open
@@ -258,7 +267,26 @@ the official app itself; the patcher discovers and verifies that.
 
 #### Install via prompt
 
-> Install the maintained fork of Codex Subscription Router from `https://github.com/Mvnshi/codex-subscription-router/tree/main` on this Windows PC using the repository's supported PowerShell installer (`install.ps1`) from a normal, non-elevated PowerShell, without modifying the official ChatGPT app or deleting any existing router state. The Windows port is provisional: tell me before setting `CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE=1`, launch the app, confirm the official app and its `codex://` handler are unchanged, and ask me only if a prerequisite requires interaction.
+> Install the maintained fork of Codex Subscription Router from `https://github.com/Mvnshi/codex-subscription-router/tree/main` on this Windows PC using the repository's supported PowerShell installer (`install.ps1`) from a normal, non-elevated PowerShell, without modifying the official ChatGPT app or deleting any existing router state. The Windows port is provisional: tell me before setting `CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE=1` (only needed if the Store app is on a build the project has not recorded), launch the app, confirm the official app and its `codex://` handler are unchanged, and ask me only if a prerequisite requires interaction.
+
+#### Windows troubleshooting
+
+Every message below is printed by the installer or patcher itself; none of them
+leaves a half-installed copy behind.
+
+| Message or symptom | What to do |
+| --- | --- |
+| `missing prerequisites: ...` | Run the `winget install` lines it prints, open a **new** PowerShell window (so `PATH` refreshes), rerun. |
+| `expected exactly one official install, found 0` | Install the ChatGPT/Codex desktop app from the Microsoft Store, open it once, rerun. If it is installed somewhere unusual, pass `--source "<its app directory>"`. |
+| `expected exactly one official install, found 2` | Two installs were found (for example Store and a manual copy). Pass `--source` with the one to use. |
+| `the source version, build, or app.asar hash is not approved` | The Store updated the app to a build the project has not recorded. The anchors are still checked, so you can opt in with `CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE=1` (installer) or `--allow-untested-source` (patcher). |
+| An error naming an anchor (`expected N ... found M`, `could not find ...`) | That Store build changed in a way the patch does not cover yet. Stop, keep the printed `Source ... version` line, and open an issue; do not loosen the check. |
+| `quit the running app before replacing it` | Close Codex Subscription Router (the installer does this itself), then rerun. The official app can stay open. |
+| `the copied app would contain paths of N characters` | Windows long paths are off and a path is still too long. Either enable `LongPathsEnabled` (elevated PowerShell, then sign out and in) or pass a short `--destination`, for example `C:\CSR`. |
+| `this installer is running as administrator` | Rerun from a normal, non-elevated PowerShell. |
+| SmartScreen warns about the app | Expected once: the copy is unsigned because its integrity resource is rewritten. |
+| The router did not update after the Store updated the official app | Rebuild: rerun the installer (it replaces the copy and keeps a backup; accounts and chat ownership are kept). |
+| Adding a second subscription | In the router, open the profile menu at the bottom of the sidebar, choose **Add another subscription**, and finish the device-code sign-in in the browser. |
 
 #### Install from a clone
 
@@ -266,14 +294,16 @@ the official app itself; the patcher discovers and verifies that.
 git clone --branch main https://github.com/Mvnshi/codex-subscription-router.git
 cd codex-subscription-router
 npm ci --ignore-scripts
-python scripts\patch_app_windows.py --allow-untested-source
+python scripts\patch_app_windows.py
 & "$env:LOCALAPPDATA\Programs\Codex Subscription Router\Codex Subscription Router.exe"
 ```
+
+(Add `--allow-untested-source` only if the Store app is on an unrecorded build.)
 
 This creates:
 
 - `%LOCALAPPDATA%\Programs\Codex Subscription Router\`, a full copy of the
-  official install directory containing `Codex Subscription Router.exe` (the
+  Store package's `app` directory (about 2 GB) containing `Codex Subscription Router.exe` (the
   launcher), the multiplexer as `codex.exe`, and the original as
   `codex.real.exe`
 - an independent desktop profile under `%APPDATA%\Codex Subscription Router`
@@ -287,7 +317,14 @@ override its discovery when the official layout differs. The copy is unsigned
 because rewriting the executable's asar-integrity resource drops the
 Authenticode signature; SmartScreen may warn once. Rebuild with
 `python scripts\patch_app_windows.py --force` (plus `--allow-untested-source`
-until a Windows build is recorded).
+after a Store update to an unrecorded build). Because the copy is made from the
+installed Store package, rebuild after the Store updates the official app to pick
+the update up.
+
+What the copy does not have, because the Store package declares it at install
+time: the `codex://` handler and Explorer context menu (they stay with the
+official app), the Store-managed Windows sandbox service, and package identity.
+See [the Windows port notes](docs/WINDOWS.md) for what was observed.
 
 ## Grant macOS permissions
 
@@ -387,7 +424,7 @@ helper and socket paths and are not relocatable or intended for redistribution.
 
 On Windows, quit Codex Subscription Router, then run
 `python scripts\patch_app_windows.py --force` (with `--allow-untested-source`
-until a build is recorded). The previous copy moves to a timestamped directory
+only for an unrecorded build). The previous copy moves to a timestamped directory
 under `%USERPROFILE%\.codex-mux\backups`; the same state and credential rules
 apply.
 
@@ -462,9 +499,12 @@ latest completed run is recorded in
 - Combined “skills explored” totals can count the same skill once per account
   because the upstream profile response exposes counts rather than skill IDs.
 - Generated macOS app bundles are tied to one macOS user and signing team.
-- The Windows port has never been exercised against an official Windows
-  build; the Windows copy is unsigned and there is no Windows Computer Use
-  helper.
+- The Windows port is provisional: verified to patch, launch and connect
+  accounts on one Store build, but routing, failover and resets have not been
+  exercised on Windows. The Windows copy is unsigned, has no package identity
+  (so no Store-managed sandbox service, `codex://` handler or Explorer menu).
+  Computer Use on Windows is untested: the package ships a helper and the copy
+  starts it, but the patcher does not re-identify it as it does on macOS.
 - Releases are source-only; patched OpenAI binaries are never distributed.
 
 ## Contributing and releases

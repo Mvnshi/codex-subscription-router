@@ -33,18 +33,44 @@ complete. Review the upstream change and update the patch deliberately.
 
 ## Windows (provisional)
 
-| Official version | FileVersion | `app.asar` SHA-256 |
-| --- | --- | --- |
+| Official package | App version / build | Host `FileVersion` (Chromium) | `app.asar` SHA-256 |
+| --- | --- | --- | --- |
+| `OpenAI.Codex` `26.930.3930.0` (Microsoft Store) | `26.930.31730` / `12947` | `154.0.8037.98` | `af98213984ec4556778ef9276193d51460153fb9b30fded882d503637b84abba` |
 
-No row exists yet: no official Windows build has been exercised, so
-`TESTED_WINDOWS_SOURCE_BUILDS` in `scripts/patch_app_windows.py` is empty and
-the Windows patcher refuses every source unless `--allow-untested-source` is
-passed. The key is the `(ProductVersion, FileVersion)` pair from the Electron
-executable's version resource; the hash is the SHA-256 of the whole official
-`resources\app.asar`, as printed on the patcher's identity line.
+This build is recorded in `TESTED_WINDOWS_SOURCE_BUILDS` in
+`scripts/patch_app_windows.py`, so the patcher accepts it without
+`--allow-untested-source`; any other build is refused until that flag is passed.
+The key is the `(ProductVersion, FileVersion)` pair from the host executable's
+version resource, which on the Store build is Chromium's `chrome.exe` launcher,
+so it is the Chromium runtime version; the hash is the SHA-256 of the whole
+official `resources\app.asar`, as printed on the patcher's identity line, and is
+the real identity.
+
+Build `12947` is **provisional**. Passed, on Windows 11 Pro 10.0.26100 (x64) with
+Go 1.27.0, Node.js 24.17.0 and Python 3.12.10:
+
+- patching: the shared renderer and main-process anchors match, after two
+  fixes recorded in [WINDOWS.md](WINDOWS.md) (a renamed memo-cache identifier in
+  the Usage sheet anchor, and the win32-guarded protocol registration)
+- repacking reproduces the official unpacked set exactly (48 entries of 21,032)
+- the official package's `app.asar` hash and Authenticode signature are
+  unchanged after the build
+- the copy launches while the official app is running, the multiplexer runs as
+  `resources\codex.exe` with `codex.real.exe` beneath it and answers `/v1/health`
+- the patched profile menu shows both subscriptions (plan and usage) and
+  "New chats use Automatic"; a second subscription was added through it and both
+  accounts report enabled and connected on the control API
+- the official app's `codex://` handler, Chrome native-messaging registration and
+  profile were not changed by building or running the copy
+
+Not yet exercised on Windows: routing a new chat to each account, sticky
+follow-ups, depletion failover and history-preserving moves, reset redemption,
+plugin account scoping, quitting the copy (no leftover `codex.exe`), a second
+launch focusing the running copy, and a `--force` rebuild. Run
+[SMOKE-TEST.md](SMOKE-TEST.md) to complete them.
 
 | Component | Tested value |
 | --- | --- |
-| Architecture | `x64` / `arm64` (untested) |
+| Architecture | `x64` (`arm64` untested) |
 
-The procedure for recording the first build is in [WINDOWS.md](WINDOWS.md).
+The procedure for recording further builds is in [WINDOWS.md](WINDOWS.md).

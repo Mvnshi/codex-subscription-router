@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/b-nnett/codex-subscription-router/internal/protocol"
@@ -85,8 +86,15 @@ func TestTransferredThreadCompatibilityAndRefresh(t *testing.T) {
 			}
 			if mode == "missing" || mode == "previously-loaded" {
 				info, err := os.Stat(destination)
-				if err != nil || info.Mode().Perm() != 0600 {
-					t.Fatalf("private history permissions: %v %v", info, err)
+				if err != nil {
+					t.Fatalf("copied history is missing: %v", err)
+				}
+				// Windows reports a fixed 0666 whatever the ACL says; the history
+				// is private there because it lives under the state root whose
+				// icacls-hardened ACL (current user and SYSTEM only) its files
+				// inherit, not because of a POSIX mode.
+				if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+					t.Fatalf("private history permissions: %v", info.Mode().Perm())
 				}
 			}
 		})

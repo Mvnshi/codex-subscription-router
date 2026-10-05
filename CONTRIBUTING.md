@@ -6,10 +6,13 @@ On macOS, use Apple silicon with Go 1.26+, Node.js 22.12+, npm, Xcode Command
 Line Tools, and an official ChatGPT installation.
 
 On Windows, use PowerShell 5.1 or 7 with Go 1.26+, Node.js 22.12+, npm, Python
-3.11+, git, and an official per-user ChatGPT desktop installation. The Windows
-port is provisional: no official Windows build has been exercised yet, so
-`scripts/patch_app_windows.py` requires `--allow-untested-source` and checks
-every layout assumption at run time. Read `docs/WINDOWS.md` first.
+3.11+, git, and the official ChatGPT/Codex desktop app from the Microsoft Store.
+The Windows port is provisional: one Store build is recorded (see
+`docs/COMPATIBILITY.md`), any other needs `--allow-untested-source`, and
+`scripts/patch_app_windows.py` checks every layout assumption at run time. Read
+`docs/WINDOWS.md` first. `npm run check` calls `python3`, which Windows does not
+provide; run the per-tool commands listed under "Development and verification"
+in the README instead.
 
 ```sh
 npm ci --ignore-scripts

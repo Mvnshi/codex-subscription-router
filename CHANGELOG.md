@@ -9,6 +9,29 @@ this project uses [Semantic Versioning](https://semver.org/).
   requires confirmation; automatic redemption is opt-in, follows account
   failover, and prevents concurrent or uncertain requests from draining credits.
 
+### Windows
+
+- The Windows port now works against the Microsoft Store build of the Codex
+  desktop app, the only way OpenAI distributes it. The patcher finds the package
+  through the package registry, reads its manifest to pick the host executable,
+  and copies the `app` directory read-only instead of refusing `WindowsApps`.
+  Verified on `OpenAI.Codex` `26.930.3930.0` (app build `12947`): patches,
+  launches beside the official app, runs the multiplexer and connects accounts;
+  recorded as provisional (routing and failover not yet exercised on Windows).
+- Repacking reproduces the official archive's unpacked set exactly, derived from
+  `asar list --is-pack`, instead of unpacking whole top-level packages. The old
+  pattern unpacked nested JavaScript and produced a directory path over Windows'
+  limit; the repack is now verified for an identical unpacked set.
+- The copy is staged under a short directory name so the default Windows
+  configuration (long paths off) is enough.
+- Accept the Store build's win32-guarded protocol registration (it never runs on
+  Windows) in an exact anchor, and let the Usage sheet anchor take the minifier's
+  name for the compiler's memo-cache array. Other registrations still fail closed.
+- `install.ps1` names the `winget install` command for each missing prerequisite.
+- The patcher streams the `app.asar` hash instead of reading 550 MB into memory.
+- Go test `TestTransferredThreadCompatibilityAndRefresh` no longer asserts a POSIX
+  file mode on Windows.
+
 ### Fixed
 
 - Reset balances distinguish loading from failed requests and update each

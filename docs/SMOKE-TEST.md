@@ -50,11 +50,14 @@ the release draft before publishing it.
 
 ## Windows
 
-No Windows build is recorded yet, so this checklist is also the procedure that
-records the first one (see [WINDOWS.md](WINDOWS.md)). Run it as a normal user
-on a PC with the official ChatGPT desktop app installed per user, with the
-official app closed before the build and running again for the side-by-side
-checks.
+One Windows build is recorded, provisionally (see
+[COMPATIBILITY.md](COMPATIBILITY.md) for what it has passed), so this checklist is
+also the procedure that completes it and records further builds (see
+[WINDOWS.md](WINDOWS.md)). Run it as a normal user on a PC with the official
+ChatGPT/Codex desktop app installed from the Microsoft Store, with the official
+app closed before the build and running again for the side-by-side checks.
+Wherever a step names the official Electron executable or install directory, the
+Store package's `app` directory under `%ProgramFiles%\WindowsApps` is meant.
 
 ### Build and identity
 
@@ -81,8 +84,10 @@ checks.
 
 - Start `Codex Subscription Router.exe` while the official app is running.
   Both windows must be open at once; `Get-Process` shows the copy's processes
-  under `%LOCALAPPDATA%\Programs\Codex Subscription Router`, one `codex.exe`
-  (the multiplexer) and one `codex.real.exe` per enabled account.
+  under `%LOCALAPPDATA%\Programs\Codex Subscription Router`, one `codex.exe
+  app-server` (the multiplexer) with one `codex.real.exe app-server` per enabled
+  account beneath it, plus a `codex.exe exec-server` (cloud environments) with its
+  own `codex.real.exe`.
 - Confirm `%APPDATA%\Codex Subscription Router` was created and the official
   app's profile directory was not modified.
 - Confirm the `codex://` handler still points at the official app:
@@ -109,7 +114,9 @@ checks.
   `%USERPROFILE%\.codex-mux\backups\<timestamp>\` and that accounts and
   thread ownership survived.
 
-There is no Computer Use section on Windows; the helper is macOS-only.
+There is no Computer Use section on Windows yet: the package ships a helper
+(`resources\cua_node\...\codex-computer-use-swift.exe`) and the copy starts it,
+but the patcher does not re-identify it and nothing has tested it in the copy.
 
 Record the tested commit, Windows build number (`winver` or
 `[Environment]::OSVersion.Version`), architecture, official `ProductVersion`,

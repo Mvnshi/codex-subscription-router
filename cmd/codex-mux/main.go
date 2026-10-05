@@ -60,6 +60,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	engineProvider, err := resolveEngineProvider(root, os.Getenv)
+	if err != nil {
+		return err
+	}
 
 	// syscall.SIGTERM is meaningful on Windows too: Go delivers CTRL_CLOSE,
 	// CTRL_LOGOFF and CTRL_SHUTDOWN console events as SIGTERM (Ctrl-C and
@@ -72,6 +76,7 @@ func run() error {
 		Environment:    os.Environ(),
 		Store:          store,
 		Output:         os.Stdout,
+		EngineProvider: engineProvider,
 	})
 	if err != nil {
 		return err
@@ -154,6 +159,37 @@ func serveClientMessages(
 	case <-ctx.Done():
 		return nil
 	}
+}
+
+// resolveEngineProvider reads the optional model-provider override for the
+// engines the router starts: CODEX_MUX_ENGINE_PROVIDER, else the first line of
+// <state root>/engine-provider. Empty (the default) leaves the Codex config alone.
+// A value that is not a plain provider id is an error rather than being ignored,
+// so a typo cannot silently send traffic through a provider that was meant to be
+// bypassed.
+func resolveEngineProvider(root string, getenv func(string) string) (string, error) {
+	source := "CODEX_MUX_ENGINE_PROVIDER"
+	value := strings.TrimSpace(getenv(source))
+	if value == "" {
+		path := filepath.Join(root, "engine-provider")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return "", nil
+			}
+			return "", fmt.Errorf("read %s: %w", path, err)
+		}
+		source = path
+		value, _, _ = strings.Cut(strings.TrimSpace(string(data)), "\n")
+		value = strings.TrimSpace(value)
+	}
+	if value == "" {
+		return "", nil
+	}
+	if !mux.ValidEngineProvider(value) {
+		return "", fmt.Errorf("engine provider %q from %s is not a plain provider id (letters, digits, '.', '_' and '-')", value, source)
+	}
+	return value, nil
 }
 
 func isInteractiveAppServer(args []string) bool {

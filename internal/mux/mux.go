@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -27,6 +28,29 @@ type Options struct {
 	Environment    []string
 	Store          *state.Store
 	Output         io.Writer
+	// EngineProvider, when set, is the model provider every engine this
+	// multiplexer starts is told to use, whatever the Codex config selects. It
+	// lets the router see real usage-limit errors (and fail over between
+	// subscriptions) when the config routes model traffic through a gateway that
+	// would otherwise answer them itself. Empty leaves the config alone.
+	EngineProvider string
+}
+
+var engineProviderPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// ValidEngineProvider reports whether id is acceptable as an engine provider:
+// it becomes part of a command line, so only plain provider ids are allowed.
+func ValidEngineProvider(id string) bool {
+	return engineProviderPattern.MatchString(id)
+}
+
+// engineArguments returns the arguments an engine is started with. A provider
+// override goes first, where the desktop app also puts its own -c settings.
+func engineArguments(provider string, args []string) []string {
+	if provider == "" {
+		return append([]string(nil), args...)
+	}
+	return append([]string{"-c", "model_provider=" + provider}, args...)
 }
 
 type externalRoute struct {
@@ -108,9 +132,12 @@ func New(options Options) (*Multiplexer, error) {
 	if options.RealExecutable == "" || options.Store == nil || options.Output == nil {
 		return nil, errors.New("real executable, store, and output are required")
 	}
+	if options.EngineProvider != "" && !ValidEngineProvider(options.EngineProvider) {
+		return nil, fmt.Errorf("engine provider %q is not a plain provider id", options.EngineProvider)
+	}
 	return &Multiplexer{
 		realExecutable:       options.RealExecutable,
-		realArgs:             append([]string(nil), options.RealArgs...),
+		realArgs:             engineArguments(options.EngineProvider, options.RealArgs),
 		environment:          append([]string(nil), options.Environment...),
 		store:                options.Store,
 		output:               options.Output,

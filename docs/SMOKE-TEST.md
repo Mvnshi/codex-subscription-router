@@ -99,7 +99,9 @@ Store package's `app` directory under `%ProgramFiles%\WindowsApps` is meant.
   a second launch focuses the running copy instead of starting another.
 - Quit the copy and confirm no `codex.exe` or `codex.real.exe` from the
   destination remains after a few seconds (Windows shutdown closes each
-  child's stdin and kills it after two seconds).
+  child's stdin and kills it after two seconds). Closing the window only hides the
+  app, which keeps running in the background (the copy has no tray icon yet): end
+  the host process, and launch it again to confirm the window comes back.
 
 ### Accounts, routing, resets, and plugins
 

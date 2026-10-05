@@ -44,6 +44,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PureWindowsPath
 from typing import NamedTuple
@@ -699,6 +700,56 @@ def count_unreachable_registrations(extracted: Path) -> int:
     )
 
 
+# The notification-area identities the app registers per build flavour: the GUID
+# passed to `new Tray(icon, guid)` on packaged Windows builds. Windows binds a tray
+# GUID to the executable that first registered it, so a copy that reuses the
+# official app's GUID from another path gets no tray icon at all: closing its window
+# then hides it with nothing left to quit it from. Each literal appears exactly once
+# in the main bundle (checked on build 12947).
+KNOWN_TRAY_GUIDS = (
+    "c4c933ff-16f4-47c7-a231-29e6bb84dccc",  # nightly
+    "c4607cac-3138-48bd-8b2a-5bc99d08e393",  # internal alpha
+    "758400cf-36c7-43be-9335-6354d603be3a",  # public beta
+    "e5768d8b-6936-4f45-b1ad-4c5fb414cb35",  # production
+)
+TRAY_GUID_NAMESPACE = "https://github.com/Mvnshi/codex-subscription-router/tray-icon/"
+
+
+def router_tray_guid(official_guid: str) -> str:
+    """A stable GUID of the copy's own for one of the official tray GUIDs."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, TRAY_GUID_NAMESPACE + official_guid))
+
+
+def retarget_tray_identity(extracted: Path) -> int:
+    """Give the copy its own tray-icon identity; returns how many GUIDs it replaced.
+
+    Zero is not an error (a future build may name the identity differently and the
+    only cost is a missing tray icon), but a GUID that appears more than once in a
+    bundle is, because replacing it could not be shown to be exact. Bundles are
+    rewritten byte for byte apart from the GUID, newlines included.
+    """
+    replaced = 0
+    for bundle_path in sorted((extracted / ".vite" / "build").glob("*.js")):
+        with open(bundle_path, encoding="utf-8", newline="") as handle:
+            bundle = handle.read()
+        changed = False
+        for guid in KNOWN_TRAY_GUIDS:
+            count = bundle.count(guid)
+            if count > 1:
+                raise RuntimeError(
+                    f"{bundle_path.name} contains the tray GUID {guid} {count} times; "
+                    "expected exactly one - re-derive the anchor"
+                )
+            if count == 1:
+                bundle = bundle.replace(guid, router_tray_guid(guid))
+                replaced += 1
+                changed = True
+        if changed:
+            with open(bundle_path, "w", encoding="utf-8", newline="") as handle:
+                handle.write(bundle)
+    return replaced
+
+
 def retarget_protocol_scheme(extracted: Path) -> int:
     """Register codex-subscription-router:// instead of taking codex:// over.
 
@@ -1240,6 +1291,16 @@ def patch_app(
             )
         else:
             print(f"Retargeted {protocol_replacements} protocol-client registration(s)")
+        tray_replacements = retarget_tray_identity(extracted)
+        if tray_replacements:
+            print(f"Gave the copy its own tray-icon identity ({tray_replacements} GUID(s))")
+        else:
+            print(
+                "Warning: no known tray-icon GUID was found, so the copy shares the "
+                "official app's tray identity and may show no tray icon; closing its "
+                "window would then leave it running with no way to quit it.",
+                file=sys.stderr,
+            )
         shared.patch_renderer(extracted, token)
 
         repacked_asar = temporary_path / "app.asar"

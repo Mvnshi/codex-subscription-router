@@ -27,7 +27,12 @@ this project uses [Semantic Versioning](https://semver.org/).
   usage-limit kill or rejection with its history intact, and follow-ups stay put.
 - Document how a provider gateway that switches provider on quota errors interacts
   with the router, and that closing the window keeps the app running in the
-  background with no tray icon to quit it from.
+  background.
+- Give the Windows copy its own tray-icon identity. The app registers its tray
+  icon with a fixed GUID that Windows binds to the first executable to use it, so
+  the copy had no tray icon and closing its window left it running with nothing to
+  quit it from. Each known GUID is replaced in an exact anchor; a repeated literal
+  stops the patch, and finding none only warns.
 - Repacking reproduces the official archive's unpacked set exactly, derived from
   `asar list --is-pack`, instead of unpacking whole top-level packages. The old
   pattern unpacked nested JavaScript and produced a directory path over Windows'

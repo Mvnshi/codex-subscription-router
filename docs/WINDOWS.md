@@ -440,10 +440,17 @@ Run-time behaviour:
   macOS one does; hence the 2 s grace and kill backstop. **Observed:** ending the
   host process left no router process behind and freed port 48123 within a
   second. Closing the window does not quit the app: it keeps running, hidden, and
-  launching it again brings the window back. The app does create a tray icon, but
-with a fixed GUID that Windows has bound to the official app's executable: the
-notification-area registry lists that GUID for the official `ChatGPT.exe` only and
-has no entry for the copy, so the copy has no tray icon and no Quit entry to use.
+  launching it again brings the window back. The app registers a tray icon with a
+fixed GUID per build flavour, and Windows binds a tray GUID to the executable that
+first registered it. The first build of the copy reused the official GUID from
+another path: the notification-area registry listed that GUID for the official
+`ChatGPT.exe` only, so the copy had no tray icon and nothing to quit it from. The
+patcher now replaces each known tray GUID with a stable GUID of the router's own
+(`retarget_tray_identity`; each literal appears exactly once in the main bundle,
+more than once stops the patch, none prints a warning). After a rebuild the
+registry lists `{BC771F8D-7AD0-5934-B870-47A7FA8AAE79}` for the copy's executable
+and the official GUID for the official one. The tray menu's Quit entry is in the
+app's code (`role: quit`); clicking it was not exercised.
 - **Observed.** `pe-library` parses the real host executable (4.7 MB) and
   `set-asar-integrity` rewrote it. It refuses PEs with a COFF symbol table and
   unusual resource layouts. One parse holds the file buffer

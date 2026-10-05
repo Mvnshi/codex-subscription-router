@@ -71,9 +71,10 @@ Launch and lifecycle
   unchanged), and launching again after the window was closed brings it back
 - ending the host process leaves nothing behind: the multiplexer, every engine
   and port 48123 were gone within one second. Closing the window only hides the
-  app, which keeps running in the background; the copy has no tray icon (Windows
-  lists the tray identity only for the official app's executable), so there is no
-  UI way to quit it yet
+  app, which keeps running in the background with its own tray icon: the shell's
+  notification-area registry lists the router's own tray GUID for the copy's
+  executable and the official GUID for the official one. The tray menu's Quit
+  entry comes from the app's code and was not clicked
 - the patched profile menu shows both subscriptions (plan and usage) and
   "New chats use Automatic"; a second subscription was added through it and both
   accounts report enabled and connected on the control API

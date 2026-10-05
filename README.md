@@ -329,11 +329,9 @@ official app), the Store-managed Windows sandbox service, and package identity.
 See [the Windows port notes](docs/WINDOWS.md) for what was observed.
 
 Closing the router's window only hides it: the app keeps running in the background
-(launching it again brings the window back). The copy currently gets no tray icon,
-because Windows binds the app's fixed tray identity to the official app's
-executable, so there is nothing to quit it from; to quit it fully, end its
-processes in Task Manager (`ChatGPT.exe` and `codex.exe` under `Codex Subscription
-Router`) or rerun the installer, which stops them for you. Each
+with its own tray icon, whose menu opens it or quits it (launching it again also
+brings the window back). The copy registers a tray identity of its own because
+Windows binds the official app's to the official executable. Each
 rebuild keeps the previous copy as a backup of about 2 GB under
 `%USERPROFILE%\.codex-mux\backups`; delete old ones when you no longer need them.
 

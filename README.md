@@ -9,7 +9,10 @@ repository root, then open `http://localhost:4173`.
 
 The routing demo uses illustrative account data only. It never calls the router,
 signs in to accounts, or spends reset credits. The macOS and provisional Windows
-instructions link to the maintained installer and compatibility notes.
+instructions link to the maintained installer and compatibility notes. Every claim on the
+pages (the Windows panel, the "What's new" cards, the FAQ and the engineering evidence table)
+must match `docs/COMPATIBILITY.md`; change them together and keep the provisional labels
+until the smoke test is complete.
 
 The maintainer link points to https://munshi.nyc. There is no payment integration,
 analytics, or browser storage. Manrope is self-hosted with its SIL Open Font License.

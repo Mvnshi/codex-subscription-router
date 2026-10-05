@@ -440,7 +440,10 @@ Run-time behaviour:
   macOS one does; hence the 2 s grace and kill backstop. **Observed:** ending the
   host process left no router process behind and freed port 48123 within a
   second. Closing the window does not quit the app: it keeps running, hidden, and
-  launching it again brings the window back, so a user quits from the tray icon.
+  launching it again brings the window back. The app does create a tray icon, but
+with a fixed GUID that Windows has bound to the official app's executable: the
+notification-area registry lists that GUID for the official `ChatGPT.exe` only and
+has no entry for the copy, so the copy has no tray icon and no Quit entry to use.
 - **Observed.** `pe-library` parses the real host executable (4.7 MB) and
   `set-asar-integrity` rewrote it. It refuses PEs with a COFF symbol table and
   unusual resource layouts. One parse holds the file buffer

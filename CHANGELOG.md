@@ -26,7 +26,8 @@ this project uses [Semantic Versioning](https://semver.org/).
   spent account falls back, a turn is moved before it is sent or replayed after a
   usage-limit kill or rejection with its history intact, and follow-ups stay put.
 - Document how a provider gateway that switches provider on quota errors interacts
-  with the router, and that closing the window keeps the app running in the tray.
+  with the router, and that closing the window keeps the app running in the
+  background with no tray icon to quit it from.
 - Repacking reproduces the official archive's unpacked set exactly, derived from
   `asar list --is-pack`, instead of unpacking whole top-level packages. The old
   pattern unpacked nested JavaScript and produced a directory path over Windows'

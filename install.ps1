@@ -353,7 +353,22 @@ function Assert-Prerequisite {
         $missing += 'python'
     }
     if ($missing.Count -ne 0) {
-        Fail "missing prerequisites: $($missing -join ' '). Install Git for Windows, Go 1.26+, Node.js 22.12+ (with npm), and Python 3.11+, then rerun this command."
+        # winget ships with current Windows 10/11 and is the shortest route to each tool; npm comes
+        # with Node.js, so a missing node or npm maps to the same package.
+        $wingetPackages = [ordered]@{
+            git = 'Git.Git'
+            go = 'GoLang.Go'
+            node = 'OpenJS.NodeJS.LTS'
+            npm = 'OpenJS.NodeJS.LTS'
+            python = 'Python.Python.3.12'
+        }
+        $installCommands = @(
+            $missing | ForEach-Object { $wingetPackages[$_] } | Select-Object -Unique |
+                ForEach-Object { "  winget install --id $_ -e" }
+        )
+        Fail ("missing prerequisites: $($missing -join ' '). Needed: Git for Windows, Go 1.26+, Node.js 22.12+ (with npm), and Python 3.11+. " +
+            "Install the missing ones, then open a NEW PowerShell window (so PATH is refreshed) and rerun this command:`n" +
+            ($installCommands -join "`n"))
     }
 
     # PowerShell's command search tries <name>.ps1 before the PATHEXT extensions, and Node.js ships

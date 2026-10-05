@@ -49,25 +49,70 @@ the real identity.
 Build `12947` is **provisional**. Passed, on Windows 11 Pro 10.0.26100 (x64) with
 Go 1.27.0, Node.js 24.17.0 and Python 3.12.10:
 
+Build and install
+
 - patching: the shared renderer and main-process anchors match, after two
   fixes recorded in [WINDOWS.md](WINDOWS.md) (a renamed memo-cache identifier in
   the Usage sheet anchor, and the win32-guarded protocol registration)
 - repacking reproduces the official unpacked set exactly (48 entries of 21,032)
 - the official package's `app.asar` hash and Authenticode signature are
   unchanged after the build
+- the real one-line installer, run from `main` over a running install with no
+  override flag: it cloned the source, stopped the old copy, rebuilt with
+  `--force`, kept the previous copy as a 2.1 GB backup under
+  `%USERPROFILE%\.codex-mux\backups`, relaunched, and left accounts, chat
+  ownership and the routing setting as they were
+
+Launch and lifecycle
+
 - the copy launches while the official app is running, the multiplexer runs as
   `resources\codex.exe` with `codex.real.exe` beneath it and answers `/v1/health`
+- a second launch does not start another instance (it exits, the process set is
+  unchanged), and launching again after the window was closed brings it back
+- ending the host process leaves nothing behind: the multiplexer, every engine
+  and port 48123 were gone within one second. Closing the window only hides the
+  app, which keeps running in the tray; quit it from the tray icon
 - the patched profile menu shows both subscriptions (plan and usage) and
   "New chats use Automatic"; a second subscription was added through it and both
   accounts report enabled and connected on the control API
 - the official app's `codex://` handler, Chrome native-messaging registration and
   profile were not changed by building or running the copy
 
-Not yet exercised on Windows: routing a new chat to each account, sticky
-follow-ups, depletion failover and history-preserving moves, reset redemption,
-plugin account scoping, quitting the copy (no leftover `codex.exe`), a second
-launch focusing the running copy, and a `--force` rebuild. Run
-[SMOKE-TEST.md](SMOKE-TEST.md) to complete them.
+Routing, switching and failover, live. A headless client drove the router's real
+multiplexer over stdio, with the desktop app's handshake, against two real
+subscriptions (Pro 5x with its weekly limit reached, Plus fresh), using
+throwaway chats pinned to the built-in provider and archived afterwards. All 12
+checks passed:
+
+- a new chat on Automatic went to the account with usage, and a real turn ran
+  there and answered; the chat stayed on that account
+- moving that chat to the other account did a real history transfer (the history
+  file appeared in the target account's home)
+- a follow-up in a chat owned by the account whose limit was reached was moved to
+  the account with usage before it was sent, answered with the earlier context
+  intact, and the client saw no usage-limit error
+- pinning the spent account fell back for a new chat; pinning an account with
+  usage was honoured
+
+Automated: seven end-to-end tests (`internal/mux/failover_e2e_test.go`) run in CI
+on every OS against real child processes and real files. They cover the same
+decisions plus the reactive paths (a turn killed by a usage limit, a `turn/start`
+rejected with one, every account spent, follow-ups staying put). Four deliberate
+breakages of the router (ignoring usage-limit notifications, forgetting the new
+owner after a move, skipping the capacity check, moving a chat without its
+history) were each caught by them.
+
+Not yet exercised on Windows:
+
+- the reactive path against the real engine, where a turn is sent to an account
+  that then reports its limit. The router's usage check moves chats first, and
+  the preview mode can only make accounts look spent, not healthy, so only the
+  automated tests cover it
+- reset redemption (it spends a real credit), plugin account scoping, Computer
+  Use and ARM64
+- how the engine sandboxes commands without the Store's sandbox service
+
+Run [SMOKE-TEST.md](SMOKE-TEST.md) to complete them.
 
 | Component | Tested value |
 | --- | --- |

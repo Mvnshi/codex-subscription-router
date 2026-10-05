@@ -20,8 +20,9 @@ accounts, failover and history-preserving account moves. Native desktop clicks,
 keyboard input and real reset redemption through the account API also passed. See
 [the 12246 port notes](docs/BUILD-12246-PORT.md). The Windows port supports the
 Microsoft Store build `26.930.3930.0` (app build `12947`), provisionally: it
-patches, launches beside the official app, and loads connected accounts, but
-routing and failover have not been exercised on Windows yet. See
+patches, launches beside the official app, and routes, switches and moves chats
+between two real subscriptions (checked live); reset redemption, plugin scoping,
+Computer Use and ARM64 are not yet exercised. See
 [the Windows port notes](docs/WINDOWS.md).
 
 ![Multi-subscription account menu](screenshots/account-menu.png)
@@ -218,8 +219,9 @@ Appshots and Computer Use may not function with an ad-hoc signature.
 > [!NOTE]
 > The Windows port is provisional. It is verified on the Microsoft Store build
 > `26.930.3930.0` (patches, launches next to the official app, runs the
-> multiplexer, shows and connects accounts); routing, failover and resets have
-> not yet been exercised on Windows. A different Store build is refused until
+> multiplexer, connects accounts, and routes, switches and moves chats between
+> two real subscriptions); reset redemption, plugin scoping, Computer Use and
+> ARM64 are not yet exercised. A different Store build is refused until
 > `--allow-untested-source` is passed, and every layout assumption is checked at
 > run time instead of assumed. Read [the Windows port notes](docs/WINDOWS.md)
 > first.
@@ -325,6 +327,29 @@ What the copy does not have, because the Store package declares it at install
 time: the `codex://` handler and Explorer context menu (they stay with the
 official app), the Store-managed Windows sandbox service, and package identity.
 See [the Windows port notes](docs/WINDOWS.md) for what was observed.
+
+Closing the router's window only hides it: the app keeps running in the tray, so
+quit it from the tray icon (launching it again brings the window back). Each
+rebuild keeps the previous copy as a backup of about 2 GB under
+`%USERPROFILE%\.codex-mux\backups`; delete old ones when you no longer need them.
+
+The router and the official app share `~/.codex`, so each lists the same chats,
+but a chat runs on the engine of whichever app you send it from. Only the router's
+own window routes between subscriptions; a chat you send from the official app
+uses the official app's engine and its own account, and nothing the router does
+changes that.
+
+If your Codex config sends model traffic through a local gateway or another
+provider (`model_provider` in `~/.codex/config.toml`), the router's per-account
+homes inherit it. A gateway that forwards each engine's own login keeps the
+accounts separate; one that substitutes its own credentials would put every
+account's traffic behind one login. A gateway that answers a quota error by
+switching provider also hides that error from the router, so it cannot fail a
+chat over mid-turn. The router still moves a chat before sending when an
+account's usage shows it is spent, and it reports "all connected subscriptions are
+depleted" for a new chat when every subscription is spent, even if the gateway
+could have served it. Remove the `model_provider` line if you want the router to
+do all the switching.
 
 ## Grant macOS permissions
 
@@ -499,9 +524,11 @@ latest completed run is recorded in
 - Combined “skills explored” totals can count the same skill once per account
   because the upstream profile response exposes counts rather than skill IDs.
 - Generated macOS app bundles are tied to one macOS user and signing team.
-- The Windows port is provisional: verified to patch, launch and connect
-  accounts on one Store build, but routing, failover and resets have not been
-  exercised on Windows. The Windows copy is unsigned, has no package identity
+- The Windows port is provisional: verified on one Store build to patch,
+  launch, connect accounts, and route, switch and move chats between two real
+  subscriptions, but reset redemption, plugin scoping and ARM64 have not been
+  exercised, and the reactive failover (a turn the engine itself reports as over
+  its limit) is covered only by automated tests. The Windows copy is unsigned, has no package identity
   (so no Store-managed sandbox service, `codex://` handler or Explorer menu).
   Computer Use on Windows is untested: the package ships a helper and the copy
   starts it, but the patcher does not re-identify it as it does on macOS.

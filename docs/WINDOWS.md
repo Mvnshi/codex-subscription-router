@@ -2,10 +2,11 @@
 
 Status in one line: provisional. Verified on one real build, the Microsoft
 Store package `OpenAI.Codex` `26.930.3930.0` (app build `12947`): it patches,
-launches beside the official app, runs the multiplexer and connects accounts.
-Routing across accounts, failover and resets have not been exercised on
-Windows, and the first version of this port (written without a Windows build to
-test against) was wrong about the one thing that matters most; see
+launches beside the official app, runs the multiplexer, connects accounts, and
+routes, switches and moves chats between two real subscriptions. Reset
+redemption, plugin scoping and ARM64 have not been exercised, and the first
+version of this port (written without a Windows build to test against) was wrong
+about the one thing that matters most; see
 [Observed on the Store build](#observed-on-the-store-build).
 
 Every other statement below about the official Windows app is still a run-time
@@ -149,6 +150,64 @@ package's `app.asar` hash (`af98213984ec...abba`) and Authenticode signature
 unchanged, left no `codex-subscription-router://` handler, and left the Chrome
 native-messaging registration for `com.openai.codexextension` pointing at the
 official manifest, which was not modified.
+
+## Routing, failover and lifecycle on the Store build
+
+**Live, on real accounts.** A headless client (the same handshake as the desktop
+app, including `capabilities.experimentalApi`) drove the router's real
+multiplexer over stdio against a Pro 5x account whose weekly limit was reached and
+a fresh Plus account, using throwaway chats pinned to the built-in `openai`
+provider and archived afterwards. All 12 checks passed: a new chat on Automatic
+went to the account with usage; a real turn ran there and answered; the chat
+stayed on its account; moving it to the other account did a real history transfer
+(the rollout file appeared under that account's `sessions`); a follow-up in a chat
+owned by the spent account was moved back to the account with usage before it was
+sent, answered with the earlier context intact, and showed the client no
+usage-limit error; pinning the spent account fell back for a new chat; pinning an
+account with usage was honoured.
+
+One thing the first attempt exposed is worth knowing: `thread/resume` with a
+`path` is an experimental call, and the engine rejects it with
+`thread/resume.path requires experimentalApi capability` unless the client
+declared `experimentalApi` at `initialize`. The desktop app does (its bootstrap
+sets it), and the multiplexer forwards the client's handshake to every engine, so
+the router is unaffected; a different client driving the multiplexer has to
+declare it too.
+
+**Automated.** `internal/mux/failover_e2e_test.go` runs the real multiplexer
+against two real child processes (a scripted engine shaped like the newer one) and
+the real filesystem, on every operating system in CI. It covers where new chats
+go, a pin on a spent account, a turn moved before it is sent, a turn killed by a
+usage-limit notification and replayed, a `turn/start` rejected with a usage limit
+and replayed, every account spent, and follow-ups staying on the owning account.
+Four deliberate breakages of the router (ignoring usage-limit notifications,
+forgetting the new owner after a move, skipping the capacity check, moving a chat
+without its history) were each caught by these tests.
+
+**Not covered live.** The reactive paths (a turn the engine itself rejects or
+kills because of a usage limit) were not driven against the real engine: the
+router's own usage check moves a chat first, and the rate-limit preview can only
+make an account look spent, never healthy. They are covered by the automated tests.
+
+**Two apps, one chat store.** The copy and the official app share `~/.codex`, so
+both list the same chats, but a turn runs on the engine of the app it was sent
+from: the engine log shows a message sent in the official app handled by the
+official app's engine (under `%LOCALAPPDATA%\OpenAI\Codex\bin`) while the
+router's engines did nothing for it. Only the router's window routes between
+subscriptions. A long-running chat that is loaded in the official app (a "goal"
+that keeps retrying, say) stays on that engine and is not moved by the router.
+
+**Providers and gateways.** Per-account homes inherit the primary account's
+`config.toml`, including `model_provider`. By its code, one local gateway that was
+read forwards each engine's own login to the plan endpoint (so accounts stay
+separate) and switches to a paid third-party provider when the plan answers a
+quota error; this was read from the gateway's source, not observed on the wire.
+With such a gateway in the path the router never sees that quota error, so it
+cannot fail a chat over mid-turn; its proactive moves (new chats, and turns on a
+chat whose owner's usage shows it spent) are unaffected because they use the
+account usage read, not the model traffic. When every subscription is spent the
+router answers a new chat with "All connected subscriptions are depleted" instead
+of letting the gateway serve it.
 
 ## Shared with macOS
 
@@ -378,9 +437,10 @@ Official app layout:
 Run-time behaviour:
 
 - The Windows `codex.exe` app-server exits promptly on stdin EOF, as the
-  macOS one does; hence the 2 s grace and kill backstop. Not tested: asking the
-  running copy to close its window did not end it (it was in use), so
-  "quitting leaves no `codex.exe` behind" is still unconfirmed.
+  macOS one does; hence the 2 s grace and kill backstop. **Observed:** ending the
+  host process left no router process behind and freed port 48123 within a
+  second. Closing the window does not quit the app: it keeps running, hidden, and
+  launching it again brings the window back, so a user quits from the tray icon.
 - **Observed.** `pe-library` parses the real host executable (4.7 MB) and
   `set-asar-integrity` rewrote it. It refuses PEs with a COFF symbol table and
   unusual resource layouts. One parse holds the file buffer
@@ -546,9 +606,9 @@ patched account menu works, including adding a second subscription. All Go,
 JavaScript, PE-helper and Python checks pass on Windows (`go test ./...`,
 `go vet ./...`, 140 Python tests). The recorded build is in
 `TESTED_WINDOWS_SOURCE_BUILDS` and [COMPATIBILITY.md](COMPATIBILITY.md), which
-also lists what has not been exercised: routing a new chat to each account,
-sticky follow-ups, depletion failover and history-preserving moves, resets,
-plugin account scoping, clean shutdown, and a `--force` rebuild. Anchors matching
-and the build completing are not evidence that routing works; run
-[SMOKE-TEST.md](SMOKE-TEST.md) to find out, and do not drop the provisional label
-before then.
+also lists what has and has not been exercised: routing, moves and failover
+between two real subscriptions, the one-line installer with a forced rebuild,
+shutdown and single-instance behaviour, and the automated end-to-end failover
+tests have passed; reset redemption, plugin account scoping, Computer Use, ARM64
+and the reactive failover against the real engine have not. Do not drop the
+provisional label before [SMOKE-TEST.md](SMOKE-TEST.md) is complete.

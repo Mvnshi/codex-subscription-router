@@ -26,9 +26,11 @@ passed. Build 8109 is provisional — it patches, signs and launches, and loads
 connected accounts, but multi-account routing has not been exercised on it.
 See [BUILD-8109-PORT.md](BUILD-8109-PORT.md). One Windows build is recorded,
 provisionally: the Microsoft Store package `OpenAI.Codex` `26.930.3930.0`
-(build `12947`). It patches, launches beside the official app and connects
-accounts; routing and failover have not been exercised on Windows. Any other
-Windows build is refused until `--allow-untested-source` is passed.
+(build `12947`). It patches, launches beside the official app, connects
+accounts, and routes, switches and moves chats between two real subscriptions
+(checked live, plus automated end-to-end tests); reset redemption, plugin scoping
+and ARM64 have not been exercised. Any other Windows build is refused until
+`--allow-untested-source` is passed.
 
 ## Known gaps
 
@@ -40,11 +42,11 @@ Windows build is refused until `--allow-untested-source` is passed.
 3. Model-aware routing needs timeout, transient-error, missing-model,
    pagination, failover and sticky-ownership tests before integration.
 4. The signed desktop smoke matrix should run before any release tag.
-5. Windows: finish the smoke test on build `12947` (routing across accounts,
-   failover, thread resume, resets, plugin scoping, clean shutdown, rebuild with
-   `--force`) and drop the provisional label, as described in
-   [WINDOWS.md](WINDOWS.md). Also exercise ARM64, and decide how to carry the
-   Store-managed Windows sandbox service (see WINDOWS.md) into the copy.
+5. Windows: finish the smoke test on build `12947` (reset redemption, plugin
+   scoping, the reactive failover against the real engine) and drop the
+   provisional label, as described in [WINDOWS.md](WINDOWS.md). Also exercise
+   ARM64, and decide how to carry the Store-managed Windows sandbox service (see
+   WINDOWS.md) into the copy.
 
 ## Install
 

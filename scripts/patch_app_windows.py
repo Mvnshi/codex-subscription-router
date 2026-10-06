@@ -146,37 +146,29 @@ TESTED_WINDOWS_SOURCE_BUILDS: dict[tuple[str, str], str | tuple[str, ...]] = {
     ),
 }
 
-# Builds the canary (.github/workflows/upstream-canary.yml) installed from the Store on a
-# clean machine, patched with every anchor matching, and booted (control API healthy,
-# renderer loaded to the sign-in screen). That is weaker than TESTED: routing, switching and
-# failover were not run on them. They are accepted without --allow-untested-source, and the
-# patcher says which level a build has. Same key and value shape as the table above;
-# scripts/upstream_watch.py and docs/MAINTAINING.md describe how entries are added.
-CANARY_VERIFIED_WINDOWS_SOURCE_BUILDS: dict[tuple[str, str], str | tuple[str, ...]] = {
-    ("154.0.8037.98", "154.0.8037.98"): (
-        # OpenAI.Codex 26.930.6422.0 x64 (app 26.930.51102, build 13100), rebuilt on the
-        # maintainer's PC: patched, launched, control API healthy, both accounts connected.
-        "bdff0036791292cb315ff25c2b836ba35addedd2327f25dd471c38df791194dd",
-    ),
-}
+# What the project has recorded beyond the hand-curated table above lives in
+# scripts/recorded_builds.json, which scripts/record_build.py edits from a canary result.
+# "verified" builds are ones the canary (.github/workflows/upstream-canary.yml) installed from
+# the Store on a clean machine, patched with every anchor matching, and booted (control API
+# healthy, renderer loaded). That is weaker than TESTED: routing, switching and failover were
+# not run on them. They are accepted without --allow-untested-source, and the patcher says which
+# level a build has. Store package version -> identity, per architecture, is also what
+# scripts/upstream_watch.py compares the Store catalog against.
+RECORDED_BUILDS_FILE = shared.PROJECT_ROOT / "scripts" / "recorded_builds.json"
+WINDOWS_PACKAGE_RECORDS: dict[str, dict] = json.loads(
+    RECORDED_BUILDS_FILE.read_text(encoding="utf-8")
+)["windows"]["packages"]
 
-# Store package version -> the identity recorded for it, per architecture, for
-# scripts/upstream_watch.py (which sees only the Store catalog, not the app.asar). Every hash
-# here must be in one of the two tables above, according to its level; a test enforces it.
-WINDOWS_PACKAGE_RECORDS: dict[str, dict] = {
-    "26.930.3930.0": {
-        "app": "26.930.31730",
-        "build": "12947",
-        "level": "tested",
-        "asar": {"x64": "af98213984ec4556778ef9276193d51460153fb9b30fded882d503637b84abba"},
-    },
-    "26.930.6422.0": {
-        "app": "26.930.51102",
-        "build": "13100",
-        "level": "verified",
-        "asar": {"x64": "bdff0036791292cb315ff25c2b836ba35addedd2327f25dd471c38df791194dd"},
-    },
-}
+
+def _verified_windows_builds() -> dict[tuple[str, str], tuple[str, ...]]:
+    verified: dict[tuple[str, str], list[str]] = {}
+    for record in WINDOWS_PACKAGE_RECORDS.values():
+        if record["level"] == "verified":
+            verified.setdefault(tuple(record["host"]), []).extend(record["asar"].values())
+    return {key: tuple(hashes) for key, hashes in verified.items()}
+
+
+CANARY_VERIFIED_WINDOWS_SOURCE_BUILDS: dict[tuple[str, str], str | tuple[str, ...]] = _verified_windows_builds()
 
 # Top-level executables that are never the Electron host: Squirrel's
 # uninstaller/updater stubs and NSIS uninstallers. Matched case-insensitively

@@ -242,7 +242,9 @@ jobs:
           BOOT_DETAIL: ${{ steps.boot.outputs.detail }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          python scripts/canary.py result --platform windows-x64 --log install.log --exit-code "${EXIT_CODE:-1}" \
+          # `python` can be the Microsoft Store stub on Windows images; the launcher is the fallback.
+          if python --version >/dev/null 2>&1; then py=python; else py="py -3"; fi
+          ${py} scripts/canary.py result --platform windows-x64 --log install.log --exit-code "${EXIT_CODE:-1}" \
             --boot "${BOOT:-skipped}" --boot-detail "${BOOT_DETAIL}" --package "${CANARY_PACKAGE}" \
             --app-version "${CANARY_APP_VERSION}" --build "${CANARY_APP_BUILD}" --run-url "${RUN_URL}" --out canary-windows-x64.json
 
@@ -359,7 +361,9 @@ jobs:
           BOOT_DETAIL: ${{ steps.boot.outputs.detail }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          python scripts/canary.py result --platform windows-arm64 --log install.log --exit-code "${EXIT_CODE:-1}" \
+          # `python` can be the Microsoft Store stub on Windows images; the launcher is the fallback.
+          if python --version >/dev/null 2>&1; then py=python; else py="py -3"; fi
+          ${py} scripts/canary.py result --platform windows-arm64 --log install.log --exit-code "${EXIT_CODE:-1}" \
             --boot "${BOOT:-skipped}" --boot-detail "${BOOT_DETAIL}" --package "${CANARY_PACKAGE}" \
             --app-version "${CANARY_APP_VERSION}" --build "${CANARY_APP_BUILD}" --run-url "${RUN_URL}" --out canary-windows-arm64.json
 

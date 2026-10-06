@@ -72,8 +72,15 @@ TESTED_SOURCE_BUILDS = {
 # Builds the canary (.github/workflows/upstream-canary.yml) downloaded from OpenAI's feed on
 # a clean macOS runner and patched with every anchor matching and an ad-hoc signature. That is
 # weaker than TESTED: the signed app was not launched with privacy grants and routing was not
-# re-run on it. They are accepted without --allow-untested-source. Same shape as above.
-CANARY_VERIFIED_SOURCE_BUILDS: dict[tuple[str, str], str] = {}
+# re-run on it. They are accepted without --allow-untested-source. Same shape as above; read from
+# scripts/recorded_builds.json, which scripts/record_build.py edits from a canary result.
+CANARY_VERIFIED_SOURCE_BUILDS: dict[tuple[str, str], str] = {
+    tuple(key.split("/", 1)): record["asar"]
+    for key, record in json.loads(
+        (PROJECT_ROOT / "scripts" / "recorded_builds.json").read_text(encoding="utf-8")
+    )["macos"]["builds"].items()
+    if record["level"] == "verified"
+}
 EXPECTED_CUA_IDENTIFIER_REPLACEMENTS = 49
 EXPECTED_CUA_IDENTIFIER_REPLACEMENTS_BY_BUILD = {
     ("26.803.61601", "6396"): 49,
@@ -93,7 +100,8 @@ EXPECTED_CUA_SERVICE_LAYOUT_BY_BUILD = {
     ("26.901.51231", "8109"): DEFAULT_CUA_SERVICE_LAYOUT,
     ("26.928.20755", "12246"): DEFAULT_CUA_SERVICE_LAYOUT,
 }
-EXPECTED_ASAR_CUA_IDENTIFIER_REPLACEMENTS = 17
+# What every build since 7746 has; builds recorded below with another count keep theirs.
+EXPECTED_ASAR_CUA_IDENTIFIER_REPLACEMENTS = 16
 EXPECTED_ASAR_CUA_IDENTIFIER_REPLACEMENTS_BY_BUILD = {
     ("26.803.61601", "6396"): 17,
     ("26.810.52044", "6662"): 20,

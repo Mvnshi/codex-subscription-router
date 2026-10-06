@@ -58,17 +58,22 @@ try {
         exit 1
     }
 
-    # 2. The app's window loaded its page (not a blank or crashed renderer).
+    # 2. The app's window loaded its page and drew something: a document that is complete but has
+    # no text is a blank or crashed renderer, which is not a boot.
     $state = $null
+    $blank = $false
     while ((Get-Date) -lt $deadline -and $null -eq $state) {
         try {
             $candidate = Invoke-RestMethod -Uri 'http://127.0.0.1:48124/v1/test/app-state?debug=1' -Headers $headers -TimeoutSec 60
-            if ($candidate.debug.readyState -eq 'complete' -and "$($candidate.debug.href)".StartsWith('app://')) { $state = $candidate }
+            if ($candidate.debug.readyState -eq 'complete' -and "$($candidate.debug.href)".StartsWith('app://')) {
+                if ("$($candidate.debug.bodyText)".Trim().Length -gt 0) { $state = $candidate } else { $blank = $true }
+            }
         } catch { }
         if ($null -eq $state) { Start-Sleep -Seconds 3 }
     }
     if ($null -eq $state) {
-        Write-Host "boot: failed (the control API answered but the app's window never finished loading)"
+        if ($blank) { Write-Host 'boot: failed (the control API answered and the window loaded its document, but it drew nothing)' }
+        else { Write-Host "boot: failed (the control API answered but the app's window never finished loading)" }
         exit 1
     }
     $text = (("$($state.debug.bodyText)" -replace '\s+', ' ').Trim())

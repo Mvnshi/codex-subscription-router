@@ -88,6 +88,9 @@ def build_result(
         "app_version": app_version or (identity.get("host_version", "") if platform == "macos" else ""),
         "build": build or (identity.get("host_second", "") if platform == "macos" else ""),
         "package": package,
+        # Windows tables are keyed by the host executable's version pair (Chromium's).
+        "host_version": identity.get("host_version", "") if platform != "macos" else "",
+        "host_second": identity.get("host_second", "") if platform != "macos" else "",
         "boot": boot,
         "boot_detail": boot_detail,
         "run_url": run_url,

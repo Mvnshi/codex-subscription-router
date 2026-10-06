@@ -1,0 +1,42 @@
+name: Something is not working
+description: The installer failed, the router misbehaves, or it stopped working after an update.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. The doctor output below saves a lot of back-and-forth: it lists your
+        versions and what the router sees, and it never prints emails, tokens or chats.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Which computer?
+      options:
+        - Windows (x64)
+        - Windows on ARM
+        - Mac (Apple silicon)
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what you saw instead. Copy any error message exactly.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Doctor output
+      description: |
+        Windows (PowerShell): `irm https://raw.githubusercontent.com/Mvnshi/codex-subscription-router/main/scripts/doctor.ps1 | iex`
+        Mac (Terminal): `curl -fsSL https://raw.githubusercontent.com/Mvnshi/codex-subscription-router/main/scripts/doctor.sh | /bin/bash`
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: installer
+    attributes:
+      label: Installer output (if it failed during install)
+      description: The last lines of what the installer printed.
+      render: text

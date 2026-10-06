@@ -1,0 +1,51 @@
+name: Upstream watch
+
+# OpenAI ships a new build of the desktop app about every day (macOS through an update feed,
+# Windows through the Microsoft Store). Every few hours this compares the newest official builds
+# with the ones the project has recorded, and keeps one tracking issue per platform up to date:
+# opened or refreshed while the newest build is unrecorded, closed once it is recorded. It reads
+# two public feeds and never downloads the app; the daily canary (upstream-canary.yml) does that.
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/upstream-watch.yml"
+      - "scripts/upstream_watch.py"
+      - "scripts/upstream_issues.py"
+      - "scripts/recorded_builds.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Compare the newest official builds with the recorded ones
+        run: |
+          python3 scripts/upstream_watch.py --json > report.json
+          cat report.json
+          python3 scripts/upstream_watch.py | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      # Pull requests only report; they never write issues.
+      - name: Keep the tracking issues current
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/upstream_issues.py sync report.json | tee -a "${GITHUB_STEP_SUMMARY}"

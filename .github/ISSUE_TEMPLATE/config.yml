@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security problem
+    url: https://github.com/Mvnshi/codex-subscription-router/security/advisories/new
+    about: Report a credential, signing or local control-service problem privately. Read SECURITY.md first.
+  - name: Troubleshooting
+    url: https://github.com/Mvnshi/codex-subscription-router#windows-troubleshooting
+    about: Most install messages are explained in the README's troubleshooting table.

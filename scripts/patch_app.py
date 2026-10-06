@@ -69,6 +69,11 @@ TESTED_SOURCE_BUILDS = {
         "12246",
     ): "2301fba40bd8fa237ccdb1369363e1deefaf27953da2d767d428225d5e9eedee",
 }
+# Builds the canary (.github/workflows/upstream-canary.yml) downloaded from OpenAI's feed on
+# a clean macOS runner and patched with every anchor matching and an ad-hoc signature. That is
+# weaker than TESTED: the signed app was not launched with privacy grants and routing was not
+# re-run on it. They are accepted without --allow-untested-source. Same shape as above.
+CANARY_VERIFIED_SOURCE_BUILDS: dict[tuple[str, str], str] = {}
 EXPECTED_CUA_IDENTIFIER_REPLACEMENTS = 49
 EXPECTED_CUA_IDENTIFIER_REPLACEMENTS_BY_BUILD = {
     ("26.803.61601", "6396"): 49,
@@ -2585,6 +2590,30 @@ def patch_info_plist(
     patch_electron_integrity_digest(app, info["ElectronAsarIntegrity"])
 
 
+def approve_source(version: str, build: str, asar_hash: str, allow_untested: bool) -> str:
+    """Accept a recorded build; returns how far it was checked ("tested" or "verified")."""
+    key = (version, build)
+    if TESTED_SOURCE_BUILDS.get(key) == asar_hash:
+        return "tested"
+    if CANARY_VERIFIED_SOURCE_BUILDS.get(key) == asar_hash:
+        print(
+            "This official build is recorded as verified by the project's canary: it patched "
+            "with every anchor matching; the signed app was not launched on it."
+        )
+        return "verified"
+    if not allow_untested:
+        raise UntestedSourceError(
+            "the source version, build, or app.asar hash is not approved; "
+            "review the upstream change or pass --allow-untested-source"
+        )
+    print(
+        "Warning: continuing with an untested official ChatGPT build; "
+        "the patch will continue only while every expected anchor matches.",
+        file=sys.stderr,
+    )
+    return "untested"
+
+
 def patch_app(
     source: Path,
     destination: Path,
@@ -2616,22 +2645,11 @@ def patch_app(
     source_build = str(source_info.get("CFBundleVersion", "unknown"))
     source_asar = source / "Contents" / "Resources" / "app.asar"
     source_asar_hash = hashlib.sha256(source_asar.read_bytes()).hexdigest()
-    expected_asar_hash = TESTED_SOURCE_BUILDS.get((source_version, source_build))
     print(
         f"Source ChatGPT version: {source_version} ({source_build}), "
         f"app.asar {source_asar_hash}"
     )
-    if expected_asar_hash != source_asar_hash and not allow_untested_source:
-        raise UntestedSourceError(
-            "the source version, build, or app.asar hash is not approved; "
-            "review the upstream change or pass --allow-untested-source"
-        )
-    if expected_asar_hash != source_asar_hash:
-        print(
-            "Warning: continuing with an untested official ChatGPT build; "
-            "the patch will continue only while every expected anchor matches.",
-            file=sys.stderr,
-        )
+    approve_source(source_version, source_build, source_asar_hash, allow_untested_source)
     if check_source_only:
         print("Source check passed; nothing was copied, built or signed.")
         return

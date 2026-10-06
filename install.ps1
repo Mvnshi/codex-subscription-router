@@ -23,6 +23,7 @@ Two ways to run it:
        $env:CODEX_SUBSCRIPTION_ROUTER_NO_LAUNCH = '1'                                   # optional
        $env:CODEX_SUBSCRIPTION_ROUTER_ASSUME_YES = '1'                                  # optional
        $env:CODEX_SUBSCRIPTION_ROUTER_NO_DESKTOP_SHORTCUT = '1'                         # optional
+       $env:CODEX_SUBSCRIPTION_ROUTER_ALLOW_ELEVATED = '1'                              # CI and containers only
        irm https://raw.githubusercontent.com/Mvnshi/codex-subscription-router/main/install.ps1 | iex
 
   2. From a clone or a downloaded copy, with ordinary parameters:
@@ -141,6 +142,9 @@ $Options = [pscustomobject]@{
     NoLaunch = ($NoLaunch.IsPresent -or ($env:CODEX_SUBSCRIPTION_ROUTER_NO_LAUNCH -eq '1'))
     AssumeYes = ($Yes.IsPresent -or ($env:CODEX_SUBSCRIPTION_ROUTER_ASSUME_YES -eq '1'))
     NoDesktopShortcut = ($NoDesktopShortcut.IsPresent -or ($env:CODEX_SUBSCRIPTION_ROUTER_NO_DESKTOP_SHORTCUT -eq '1'))
+    # The router installs per user, so an administrator shell would put it in the wrong profile.
+    # Hosted CI runners are administrators with nobody else to install for; they say so here.
+    AllowElevated = ($env:CODEX_SUBSCRIPTION_ROUTER_ALLOW_ELEVATED -eq '1')
 }
 
 # Path of this file when it runs from disk (a clone, a download, or dot-sourcing); empty under
@@ -481,7 +485,7 @@ function Assert-Prerequisite {
         Fail "Codex Subscription Router currently requires 64-bit Windows (x64 or ARM64); found '$architecture'.$hint"
     }
 
-    if (Test-Elevated) {
+    if ((Test-Elevated) -and -not $Options.AllowElevated) {
         Fail "this installer is running as administrator. Codex Subscription Router installs per user under $DestinationDir; rerun it from a normal (non-elevated) PowerShell."
     }
 

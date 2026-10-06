@@ -71,7 +71,26 @@ CODEX_EXECUTABLE_NAME = "codex.exe"
 INTEGRITY_ASAR_FILE = "resources\\app.asar"
 PROTOCOL_SCHEME = "codex-subscription-router"
 DEFAULT_ELECTRON_EXECUTABLE_NAME = "ChatGPT.exe"
-START_MENU_SHORTCUT_NAME = f"{DESTINATION_DIRECTORY_NAME}.lnk"
+# What people look for in the Start menu and on the Desktop. The install folder
+# and the launcher keep the longer project name so existing installs, backups
+# and state are untouched.
+SHORTCUT_DISPLAY_NAME = "Codex Router"
+SHORTCUT_DESCRIPTION = "Codex with all your subscriptions"
+START_MENU_SHORTCUT_NAME = f"{SHORTCUT_DISPLAY_NAME}.lnk"
+# The shortcut earlier versions created; removed when it points at this launcher.
+LEGACY_SHORTCUT_NAME = f"{DESTINATION_DIRECTORY_NAME}.lnk"
+# The router's own artwork (scripts/make_icons.py) so the copy can be told apart
+# from the official app in the Start menu, taskbar and notification area. The app
+# reads its window and tray icons from plain files beside app.asar, so the copy
+# gets ours under the names it looks up. Names the official app does not ship are
+# skipped, not created.
+ICON_DIRECTORY = shared.PROJECT_ROOT / "assets" / "windows"
+SHORTCUT_ICON_NAME = f"{SHORTCUT_DISPLAY_NAME}.ico"
+ICON_REPLACEMENTS = (
+    ("codex-router.ico", ("chatgpt-app-dark.ico", "chatgpt-app-light.ico")),
+    ("codex-router-tray-dark.ico", ("chatgpt-tray-dark.ico",)),
+    ("codex-router-tray-light.ico", ("chatgpt-tray-light.ico",)),
+)
 # Go's GOARCH for the machine type of the official host executable, as
 # scripts/win/exe-info.mjs reports it. The multiplexer and launcher run next to
 # that host, so they are built for its architecture rather than whatever the
@@ -219,7 +238,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--no-shortcut",
         action="store_true",
-        help="Do not create the Start menu shortcut.",
+        help="Do not create the Start menu or Desktop shortcut.",
+    )
+    parser.add_argument(
+        "--check-source",
+        action="store_true",
+        help=(
+            "Only find the official app and check it against the recorded builds, then stop "
+            "without copying or building anything (exit 3: not a recorded build)."
+        ),
+    )
+    parser.add_argument(
+        "--no-desktop-shortcut",
+        action="store_true",
+        help="Create the Start menu shortcut but not the Desktop one.",
     )
     return parser.parse_args(argv)
 
@@ -661,6 +693,16 @@ def source_identity(exe_info: dict, asar_sha256: str) -> SourceIdentity:
     )
 
 
+# Exit status of --check-source and of a full run when the only problem is that the
+# official build is not one the project has recorded. install.ps1 turns it into a
+# question for the person; any other failure is 1.
+UNTESTED_SOURCE_EXIT_CODE = 3
+
+
+class UntestedSourceError(RuntimeError):
+    """The official build is not recorded as tested (nothing else is wrong with it yet)."""
+
+
 def approve_source(identity: SourceIdentity, allow_untested: bool) -> None:
     recorded = TESTED_WINDOWS_SOURCE_BUILDS.get(
         (identity.product_version, identity.file_version)
@@ -669,7 +711,7 @@ def approve_source(identity: SourceIdentity, allow_untested: bool) -> None:
     if identity.asar_sha256 in allowed:
         return
     if not allow_untested:
-        raise RuntimeError(
+        raise UntestedSourceError(
             "the source version, build, or app.asar hash is not approved; "
             "review the upstream change or pass --allow-untested-source"
         )
@@ -1003,15 +1045,51 @@ def icacls_commands(state_root: Path, username: str) -> list[list[str]]:
     ]
 
 
-def shortcut_command(launcher: Path, shortcut_path: Path) -> list[str]:
-    script = (
-        "$shell = New-Object -ComObject WScript.Shell; "
-        f"$shortcut = $shell.CreateShortcut({powershell_literal(shortcut_path)}); "
-        f"$shortcut.TargetPath = {powershell_literal(launcher)}; "
-        f"$shortcut.WorkingDirectory = {powershell_literal(launcher.parent)}; "
-        "$shortcut.Save()"
+def shortcut_command(
+    launcher: Path,
+    shortcut_path: Path,
+    *,
+    icon_path: Path | None = None,
+    desktop: bool = False,
+    legacy_path: Path | None = None,
+) -> list[str]:
+    """One PowerShell command that creates the shortcuts and tidies the old one.
+
+    The Desktop folder is asked of Windows from inside the script because it can
+    be redirected (OneDrive), which the environment does not say. A legacy
+    shortcut is only removed when it points at this launcher.
+    """
+    launcher_literal = powershell_literal(launcher)
+    icon_statement = (
+        f" $shortcut.IconLocation = {powershell_literal(str(icon_path) + ',0')};" if icon_path else ""
     )
-    return ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
+    lines = [
+        "$shell = New-Object -ComObject WScript.Shell",
+        "function Save-Shortcut([string]$path) {"
+        " $shortcut = $shell.CreateShortcut($path);"
+        f" $shortcut.TargetPath = {launcher_literal};"
+        f" $shortcut.WorkingDirectory = {powershell_literal(launcher.parent)};"
+        f" $shortcut.Description = {powershell_literal(SHORTCUT_DESCRIPTION)};"
+        + icon_statement
+        + " $shortcut.Save() }",
+        f"Save-Shortcut {powershell_literal(shortcut_path)}",
+    ]
+    if desktop:
+        # No Desktop folder (a redirected or removed one) means no Desktop shortcut, not an error.
+        lines += [
+            "$desktopFolder = [Environment]::GetFolderPath('Desktop')",
+            "if ($desktopFolder) { "
+            f"$desktopPath = Join-Path $desktopFolder {powershell_literal(f'{SHORTCUT_DISPLAY_NAME}.lnk')}; "
+            'Save-Shortcut $desktopPath; Write-Host "Desktop shortcut: $desktopPath" }',
+        ]
+    if legacy_path is not None:
+        legacy_literal = powershell_literal(legacy_path)
+        lines.append(
+            f"if (Test-Path -LiteralPath {legacy_literal}) {{"
+            f" if ($shell.CreateShortcut({legacy_literal}).TargetPath -eq {launcher_literal}) {{"
+            f" Remove-Item -LiteralPath {legacy_literal}; Write-Host 'Removed the old shortcut name.' }} }}"
+        )
+    return ["powershell", "-NoProfile", "-NonInteractive", "-Command", "; ".join(lines)]
 
 
 # --- Windows-only I/O -------------------------------------------------------
@@ -1070,18 +1148,37 @@ def long_paths_enabled() -> bool | None:
     return value == 1
 
 
-def start_menu_shortcut_path(env: Mapping[str, str]) -> Path:
+def start_menu_programs_directory(env: Mapping[str, str]) -> Path:
     app_data = environment_value(env, "APPDATA")
     if app_data is None:
         raise RuntimeError("APPDATA is not set")
-    return (
-        Path(app_data)
-        / "Microsoft"
-        / "Windows"
-        / "Start Menu"
-        / "Programs"
-        / START_MENU_SHORTCUT_NAME
-    )
+    return Path(app_data) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+
+
+def start_menu_shortcut_path(env: Mapping[str, str]) -> Path:
+    return start_menu_programs_directory(env) / START_MENU_SHORTCUT_NAME
+
+
+def install_icons(stage: Path) -> list[str]:
+    """Give the staged copy the router's icons; returns what it replaced.
+
+    Only files the official app already ships are replaced (the app looks them
+    up by name). A router icon missing from the repository is an error rather
+    than a silent skip, since the repository is supposed to carry all three.
+    """
+    resources = stage / "resources"
+    replaced: list[str] = []
+    for source_name, targets in ICON_REPLACEMENTS:
+        source = ICON_DIRECTORY / source_name
+        if not source.is_file():
+            raise RuntimeError(f"missing router icon {source}")
+        for target_name in targets:
+            target = resources / target_name
+            if target.is_file():
+                shutil.copyfile(source, target)
+                replaced.append(target_name)
+    shutil.copyfile(ICON_DIRECTORY / "codex-router.ico", stage / SHORTCUT_ICON_NAME)
+    return replaced
 
 
 def rewrite_asar_integrity(executable: Path, entry: dict, digest: str) -> str:
@@ -1183,6 +1280,8 @@ def patch_app(
     electron_executable: str | None,
     codex_executable: str | None,
     create_shortcut: bool,
+    create_desktop_shortcut: bool = True,
+    check_source_only: bool = False,
 ) -> None:
     if sys.platform != "win32":
         raise RuntimeError(
@@ -1239,6 +1338,9 @@ def patch_app(
         f"{'signed' if identity.signed else 'unsigned'}, app.asar {source_asar_hash}"
     )
     approve_source(identity, allow_untested_source)
+    if check_source_only:
+        print("Source check passed; nothing was copied or built.")
+        return
 
     token = shared.load_or_create_token()
     harden_state_root(shared.DEFAULT_STATE_ROOT)
@@ -1341,6 +1443,16 @@ def patch_app(
         shutil.copy2(mux, real_codex)
         print(f"Multiplexer installed at {real_codex.relative_to(stage)}")
 
+        replaced_icons = install_icons(stage)
+        if replaced_icons:
+            print(f"Gave the copy its own icons ({', '.join(replaced_icons)})")
+        else:
+            print(
+                "Warning: none of the app's icon files were found, so the copy keeps "
+                "the official app's icons.",
+                file=sys.stderr,
+            )
+
         # Not signed: there is no codesign equivalent here, and rewriting the
         # integrity resource strips the official Authenticode signature.
         staged_electron_exe = stage / electron_exe.name
@@ -1377,10 +1489,18 @@ def patch_app(
         try:
             shortcut = start_menu_shortcut_path(env)
             shortcut.parent.mkdir(parents=True, exist_ok=True)
-            shared.run(shortcut_command(launcher, shortcut))
+            shared.run(
+                shortcut_command(
+                    launcher,
+                    shortcut,
+                    icon_path=destination / SHORTCUT_ICON_NAME,
+                    desktop=create_desktop_shortcut,
+                    legacy_path=shortcut.parent / LEGACY_SHORTCUT_NAME,
+                )
+            )
             print(f"Start menu shortcut: {shortcut}")
         except (RuntimeError, OSError, subprocess.CalledProcessError) as error:
-            print(f"Warning: could not create the Start menu shortcut: {error}", file=sys.stderr)
+            print(f"Warning: could not create the shortcuts: {error}", file=sys.stderr)
 
     print(destination)
     print(launcher)
@@ -1397,7 +1517,13 @@ def main(argv: list[str] | None = None) -> int:
             args.electron_executable,
             args.codex_executable,
             not args.no_shortcut,
+            not args.no_desktop_shortcut,
+            args.check_source,
         )
+    except UntestedSourceError as error:
+        # A question for the person, not a failure, when only checking.
+        print(error if args.check_source else f"patch failed: {error}", file=sys.stderr)
+        return UNTESTED_SOURCE_EXIT_CODE
     except (RuntimeError, OSError, subprocess.CalledProcessError) as error:
         print(f"patch failed: {error}", file=sys.stderr)
         return 1

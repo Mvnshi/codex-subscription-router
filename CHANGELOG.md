@@ -9,6 +9,29 @@ this project uses [Semantic Versioning](https://semver.org/).
   requires confirmation; automatic redemption is opt-in, follows account
   failover, and prevents concurrent or uncertain requests from draining credits.
 
+### Setup and launch
+
+- Make installing possible without knowing what a terminal is. `install.ps1` offers to install
+  Go, Node.js and Python with winget when they are missing and picks up the new `PATH` without
+  opening a new window, no longer needs Git (it downloads the source as a zip when Git is
+  absent), and asks in plain words before building from a Codex build the project has not
+  recorded. The patchers gained `--check-source` and exit code 3 for that case so the installer
+  can ask before it stops or builds anything. `install.sh` got the same questions, offers
+  Homebrew and Apple's Command Line Tools installer for missing tools, and offers a basic
+  (ad-hoc) signature on a Mac with no Apple certificate. Where nobody can answer, the matching
+  environment variable (`CODEX_SUBSCRIPTION_ROUTER_ASSUME_YES` and friends) does.
+- Windows: the Start menu shortcut is now named **Codex Router** and is also placed on the
+  Desktop (`--no-desktop-shortcut` skips it); the shortcut that older versions made is removed
+  when it points at the same copy. The copy gets the router's own icons for the shortcuts, the
+  window and the notification area (`assets/windows`, drawn by `scripts/make_icons.py` from the
+  website mark) so it can be told apart from the official app.
+- Add `install-windows.cmd` and `install-mac.command` for a double-click install from a downloaded
+  copy, `scripts/uninstall.ps1` (with `-WhatIf`, `-RemoveAccounts`, `-RemoveBackups`),
+  read-only `scripts/doctor.ps1` and `scripts/doctor.sh` whose output is safe to paste into an
+  issue, and `AGENTS.md` for AI assistants asked to install or work on the project.
+- CI runs the installer logic on both shells that matter (Windows PowerShell 5.1 and 7, and
+  macOS's bash 3.2), the uninstaller against a sandbox profile, and the doctor scripts.
+
 ### Windows
 
 - Plugin requests scoped to an account that was removed or paused now fail with an

@@ -1,4 +1,27 @@
 #!/bin/bash
+#
+# Codex Subscription Router - macOS installer.
+#
+# Downloads or updates the source, installs the locked build tools, builds the
+# independent copy of the official ChatGPT app, and opens it. The official app is
+# only read; it is never modified.
+#
+# Missing tools are offered with Homebrew, a newer ChatGPT build than the project
+# has recorded is explained and asked about, and a Mac without an Apple signing
+# certificate is offered a basic (ad-hoc) signature. Questions are asked on the
+# terminal, so `curl ... | /bin/bash` works. Where nobody can answer (another
+# program is running this), set the matching variable instead:
+#
+#   CODEX_SUBSCRIPTION_ROUTER_ASSUME_YES=1            answer yes to every question
+#   CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE=1 build from an unrecorded ChatGPT build
+#   CODEX_SUBSCRIPTION_ROUTER_ALLOW_ADHOC_SIGNING=1   sign without an Apple certificate
+#   CODEX_SUBSCRIPTION_ROUTER_NO_LAUNCH=1             build without opening the app
+#   CODEX_SUBSCRIPTION_ROUTER_SOURCE_DIR=<path>       where the one-liner keeps its checkout
+#   CODEX_SUBSCRIPTION_ROUTER_DRY_RUN=1               only define the functions (for tests)
+#   CODEX_SUBSCRIPTION_ROUTER_TTY=<file>              where answers are read from (default /dev/tty; for tests)
+#
+# macOS ships bash 3.2, so this file avoids anything newer (associative arrays,
+# mapfile, ${var,,}) and never expands an empty array under `set -u`.
 
 set -euo pipefail
 
@@ -16,6 +39,83 @@ log() {
 fail() {
     printf '\nInstall failed: %s\n' "$1" >&2
     exit 1
+}
+
+# Asks a yes/no question of a person. Returns 0 for yes (also the default), 1 for
+# no, and 2 when nobody can be asked. The answer is read from the terminal because
+# under `curl | bash` stdin is the script itself.
+ask_yes_no() {
+    local question="$1"
+    local answer=""
+    local tty_path="${CODEX_SUBSCRIPTION_ROUTER_TTY:-/dev/tty}"
+    if [ "${CODEX_SUBSCRIPTION_ROUTER_ASSUME_YES:-}" = "1" ]; then
+        return 0
+    fi
+    if ! ( : < "${tty_path}" ) 2>/dev/null; then
+        return 2
+    fi
+    printf '%s [Y/n] ' "${question}" >&2
+    IFS= read -r answer < "${tty_path}" || answer=""
+    case "${answer}" in
+        n|N|no|No|NO) return 1 ;;
+    esac
+    return 0
+}
+
+# Homebrew's location on Apple silicon is not on the PATH of every shell.
+load_homebrew() {
+    if ! command -v brew >/dev/null 2>&1 && [ -x /opt/homebrew/bin/brew ]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    fi
+}
+
+# Tries to provide what is missing: the Xcode Command Line Tools (git, python3,
+# clang, codesign) through Apple's own installer, Go and Node.js through Homebrew.
+# Anything it cannot or may not do is left for the caller's error message.
+offer_missing_tools() {
+    local missing="$1"
+    local formulae=""
+    local answer=0
+
+    case " ${missing} " in
+        *" git "*|*" python3 "*|*" security "*|*" xcrun "*)
+            ask_yes_no "The Xcode Command Line Tools (Apple's free developer tools) are missing. Start their installer now?" || answer=$?
+            if [ "${answer}" -eq 0 ]; then
+                xcode-select --install >/dev/null 2>&1 || true
+                fail "finish the Xcode Command Line Tools installer that just opened (it can take several minutes), then run this command again."
+            fi
+            ;;
+    esac
+
+    case " ${missing} " in *" go "*) formulae="${formulae} go" ;; esac
+    case " ${missing} " in *" node "*|*" npm "*) formulae="${formulae} node" ;; esac
+    if [ -z "${formulae}" ]; then
+        return
+    fi
+    load_homebrew
+    if ! command -v brew >/dev/null 2>&1; then
+        return
+    fi
+    answer=0
+    ask_yes_no "Install${formulae} with Homebrew now?" || answer=$?
+    if [ "${answer}" -eq 0 ]; then
+        # shellcheck disable=SC2086 # the formula list is meant to split
+        brew install ${formulae} >&2
+    fi
+}
+
+# A signing identity Apple's tools will use: one named in the environment, or a
+# team-backed certificate in the keychain.
+has_signing_identity() {
+    if [ -n "${CODEX_MUX_SIGNING_IDENTITY:-}" ]; then
+        return 0
+    fi
+    local identities
+    identities="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+    case "${identities}" in
+        *"Developer ID Application"*|*"Apple Development"*) return 0 ;;
+    esac
+    return 1
 }
 
 node_is_supported() {
@@ -68,7 +168,17 @@ require_prerequisites() {
         fi
     done
     if [ "${#missing[@]}" -ne 0 ]; then
-        fail "missing prerequisites: ${missing[*]}. Install Xcode Command Line Tools, Go 1.26+, and Node.js 22.12+, then rerun this command."
+        offer_missing_tools "${missing[*]}"
+        # Look again: Homebrew may have just provided Go and Node.js.
+        local still_missing=()
+        for command_name in "${missing[@]}"; do
+            if ! command -v "${command_name}" >/dev/null 2>&1; then
+                still_missing+=("${command_name}")
+            fi
+        done
+        if [ "${#still_missing[@]}" -ne 0 ]; then
+            fail "missing prerequisites: ${still_missing[*]}. Install Xcode Command Line Tools (xcode-select --install), Go 1.26+ and Node.js 22.12+ (with Homebrew: brew install go node), then rerun this command."
+        fi
     fi
 
     local node_major
@@ -146,6 +256,47 @@ stop_bundle_processes() {
     fail "could not stop processes belonging to ${bundle_path}."
 }
 
+# The ChatGPT app on this Mac is a build the project has not recorded. Say what that
+# means in plain words and ask. The patcher still refuses by itself if anything it
+# expects has changed, and the official app is never modified.
+confirm_untested_source() {
+    local answer=0
+    if [ "${CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE:-}" = "1" ]; then
+        return
+    fi
+    {
+        printf '\nThe ChatGPT app on this Mac is newer than the versions this project has tested.\n'
+        printf 'Codex Subscription Router can still be built from it: every step checks that the app\n'
+        printf 'looks exactly as expected and stops by itself if it does not, and your ChatGPT app is\n'
+        printf 'never changed. The only risk is that something in the router misbehaves on this version.\n'
+    } >&2
+    ask_yes_no "Build it anyway?" || answer=$?
+    case "${answer}" in
+        0) ;;
+        1) fail "stopped at your request. Nothing was changed." ;;
+        *) fail "the ChatGPT app is a build the project has not tested, and nobody can be asked here. Set CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE=1 to continue anyway." ;;
+    esac
+}
+
+# No Apple signing certificate was found. A basic (ad-hoc) signature is enough for
+# the app to run, accounts, routing and usage included; Computer Use and Appshots
+# need a certificate from an Apple developer account to get macOS privacy grants.
+confirm_adhoc_signing() {
+    local answer=0
+    {
+        printf '\nNo Apple signing certificate was found on this Mac.\n'
+        printf 'Codex Subscription Router can be built with a basic signature instead. Accounts, routing\n'
+        printf 'and usage work; Computer Use and Appshots may not (they need a certificate from an Apple\n'
+        printf 'developer account, which is free to create in Xcode).\n'
+    } >&2
+    ask_yes_no "Build with a basic signature?" || answer=$?
+    case "${answer}" in
+        0) ;;
+        1) fail "stopped at your request. Nothing was changed." ;;
+        *) fail "no signing certificate was found, and nobody can be asked here. Set CODEX_SUBSCRIPTION_ROUTER_ALLOW_ADHOC_SIGNING=1 to build with a basic signature, or set CODEX_MUX_SIGNING_IDENTITY." ;;
+    esac
+}
+
 main() {
     log "Checking this Mac"
     require_prerequisites
@@ -158,6 +309,45 @@ main() {
     npm ci --ignore-scripts --no-audit --no-fund
 
     local patch_arguments=()
+    if [ "${CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE:-}" = "1" ]; then
+        patch_arguments+=("--allow-untested-source")
+    fi
+    if [ "${CODEX_SUBSCRIPTION_ROUTER_ALLOW_ADHOC_SIGNING:-}" = "1" ]; then
+        patch_arguments+=("--allow-adhoc-signing")
+    fi
+
+    # Find out about the app before anything is stopped or built: a ChatGPT build the
+    # project has not recorded is a question for the person, and answering "no" must
+    # leave their running copy alone.
+    log "Checking the ChatGPT app on this Mac"
+    local check_status=0
+    if [ "${#patch_arguments[@]}" -ne 0 ]; then
+        python3 scripts/patch_app.py --check-source "${patch_arguments[@]}" || check_status=$?
+    else
+        python3 scripts/patch_app.py --check-source || check_status=$?
+    fi
+    if [ "${check_status}" -eq 3 ]; then
+        confirm_untested_source
+        patch_arguments+=("--allow-untested-source")
+    elif [ "${check_status}" -ne 0 ]; then
+        fail "the source check failed with exit code ${check_status}; the message above says why."
+    fi
+
+    # Without an Apple certificate the app can still be built with a basic signature.
+    local arguments_text=" "
+    if [ "${#patch_arguments[@]}" -ne 0 ]; then
+        arguments_text=" ${patch_arguments[*]} "
+    fi
+    case "${arguments_text}" in
+        *" --allow-adhoc-signing "*) ;;
+        *)
+            if ! has_signing_identity; then
+                confirm_adhoc_signing
+                patch_arguments+=("--allow-adhoc-signing")
+            fi
+            ;;
+    esac
+
     if [ -d "${DESTINATION_APP}" ] || [ -d "${DESTINATION_HELPER}" ]; then
         log "Stopping the existing installation"
         stop_bundle_processes "${DESTINATION_APP}"
@@ -165,7 +355,7 @@ main() {
         patch_arguments+=("--force")
     fi
 
-    log "Building and signing Codex Subscription Router"
+    log "Building and signing Codex Subscription Router (this takes a few minutes)"
     # macOS /bin/bash is 3.2; with set -u, expanding an empty array (e.g. "${patch_arguments[@]}") errors as “unbound variable”.
     if [ "${#patch_arguments[@]}" -ne 0 ]; then
         python3 scripts/patch_app.py "${patch_arguments[@]}"
@@ -173,9 +363,20 @@ main() {
         python3 scripts/patch_app.py
     fi
 
-    log "Launching Codex Subscription Router"
-    open "${DESTINATION_APP}"
+    if [ "${CODEX_SUBSCRIPTION_ROUTER_NO_LAUNCH:-}" = "1" ]; then
+        log "Skipping launch (CODEX_SUBSCRIPTION_ROUTER_NO_LAUNCH=1)"
+    else
+        log "Opening Codex Subscription Router"
+        open "${DESTINATION_APP}"
+    fi
+    printf '\nCodex Subscription Router is installed.\n' >&2
+    printf '  Open it any time from ~/Applications, or press Command+Space and type "Codex Subscription Router".\n' >&2
+    printf '  Your normal ChatGPT app is untouched and keeps working as before.\n' >&2
     printf '\nInstalled successfully: %s\n' "${DESTINATION_APP}"
 }
 
-main "$@"
+# CODEX_SUBSCRIPTION_ROUTER_DRY_RUN=1 only defines the functions, so the repository
+# checks (scripts/test-install.sh) can exercise them without installing anything.
+if [ "${CODEX_SUBSCRIPTION_ROUTER_DRY_RUN:-}" != "1" ]; then
+    main "$@"
+fi

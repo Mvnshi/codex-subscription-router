@@ -1,45 +1,29 @@
-# Codex Subscription Router — maintained fork
+# Codex Router
+
+**Use all your ChatGPT and Codex subscriptions in one app.** Codex Router is a free, open-source
+copy of the official desktop app that spreads your chats across every subscription you connect,
+moves a chat to another subscription when one runs out of usage, and lets you choose which
+subscription to use. It works on **Windows** and **macOS**. (The project's full name is Codex
+Subscription Router; **Codex Router** is the name you will see in your Start menu.)
 
 Maintained by [Mvnshi](https://github.com/Mvnshi), based on
 [b-nnett's original project](https://github.com/b-nnett/codex-subscription-router),
-with community compatibility work and its original authorship preserved.
+with community compatibility work and its original authorship preserved. See
+[branch status and credits](docs/MAINTAINED.md).
 
-A free, open-source ChatGPT subscription router for multiple accounts: balance
-usage, keep conversations moving, and manage subscriptions in one local desktop app.
-See [branch status and credits](docs/MAINTAINED.md).
-
-[Visit the website](https://mvnshi.github.io/codex-subscription-router/) ·
-[Website source](website/)
-
-Supports the recorded official macOS builds `6396` through `12246`. Build `8109` is
-provisional: it patches, signs, launches and loads connected accounts, but
-routing and failover have not been exercised on it. See
-[the 8109 port notes](docs/BUILD-8109-PORT.md). Build `12246` patches, signs and
-launches, and passes account/usage/profile/plugin screens, routing on three
-accounts, failover and history-preserving account moves. Native desktop clicks,
-keyboard input and real reset redemption through the account API also passed. See
-[the 12246 port notes](docs/BUILD-12246-PORT.md). The Windows port supports the
-Microsoft Store build `26.930.3930.0` (app build `12947`), provisionally: it
-patches, launches beside the official app, and routes, switches and moves chats
-between two real subscriptions, and its usage sheet with per-account resets and
-per-account plugin connections work (checked live). Computer Use is off by default
-in OpenAI's Windows build and the router leaves that alone; ARM64 is built and
-tested in CI but not yet run on ARM64 hardware. See
-[the Windows port notes](docs/WINDOWS.md).
+[Website](https://mvnshi.github.io/codex-subscription-router/) ·
+[Get started](#get-started) ·
+[Troubleshooting](#windows-troubleshooting) ·
+[Report a problem](https://github.com/Mvnshi/codex-subscription-router/issues/new/choose)
 
 ![Multi-subscription account menu](screenshots/account-menu.png)
 
-Use multiple ChatGPT subscriptions from one independent desktop app on macOS
-or Windows.
+It builds a locally patched copy of the official app on your own computer, balances new chats
+across your subscriptions, and keeps every thread on one subscription so follow-up turns keep
+their context and benefit from account-level caching.
 
-Codex Subscription Router creates a locally patched copy of the official
-ChatGPT app, balances new chats across connected subscriptions, and keeps every
-thread on one subscription so follow-up turns retain conversation context and
-benefit from account-level caching.
-
-The official ChatGPT installation is used only as build input and is never
-modified. This repository contains source code and build tooling—not OpenAI
-binaries or a prebuilt application.
+The official app is only read, never modified, and keeps working exactly as before. This
+repository contains source code and build tooling, not OpenAI binaries or a prebuilt app.
 
 > [!WARNING]
 > This is an unofficial, version-sensitive project. It is not affiliated with
@@ -47,6 +31,73 @@ binaries or a prebuilt application.
 > the terms governing every connected subscription.
 
 ![Combined multi-account profile](screenshots/combined-profile-20px.png)
+
+## Get started
+
+About ten minutes, and nothing to install first. You need the official app on your computer, signed
+in once: on **Windows** the **Codex** app from the Microsoft Store; on a **Mac** (Apple silicon) the
+**ChatGPT** app in your Applications folder.
+
+### Windows
+
+1. Press the **Windows key**, type **PowerShell** and press **Enter**.
+2. Paste this line and press **Enter**:
+
+   ```powershell
+   irm https://raw.githubusercontent.com/Mvnshi/codex-subscription-router/main/install.ps1 | iex
+   ```
+
+3. If it says some free build tools are missing (Go, Node.js, Python), press **Enter** to let it
+   install them. Windows may ask you to allow each one.
+4. Wait a few minutes. When it finishes, **Codex Router** opens.
+
+Next time, press the **Windows key**, type **Codex Router** and press **Enter**. There is an icon
+on your Desktop too, and the router has its own icon, so you can tell it from the normal Codex app.
+
+Prefer a double-click? Download this repository as a ZIP, unzip it, and double-click
+`install-windows.cmd`.
+
+### Mac
+
+1. Press **Command + Space**, type **Terminal** and press **Enter**.
+2. Paste this line and press **Enter**:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/Mvnshi/codex-subscription-router/main/install.sh | /bin/bash
+   ```
+
+3. If it says some developer tools are missing, press **Enter** to let it install them. Apple's own
+   installer opens for the Xcode Command Line Tools; when that finishes, run the same line again.
+   Go and Node.js come from [Homebrew](https://brew.sh) if you have it.
+4. No Apple developer certificate? It offers a basic signature instead. Accounts, routing and usage
+   work with it; Computer Use and Appshots may not.
+5. Wait a few minutes. When it finishes, the app opens.
+
+Next time, press **Command + Space**, type **Codex Subscription Router** and press **Enter**.
+
+Prefer a double-click? Download this repository as a ZIP, unzip it, and open
+`install-mac.command` (the first time, right-click it and choose **Open**).
+
+### Add your other subscriptions
+
+In the router, open the profile menu at the bottom of the sidebar, choose **Add another
+subscription**, and finish the sign-in in your browser. The menu then shows every subscription with
+its remaining usage, and **New chats use** lets you pick which one new chats go to.
+
+### Let an AI assistant do it
+
+> Install Codex Router from `https://github.com/Mvnshi/codex-subscription-router` on this computer. Read AGENTS.md in the repository first and use the project's own installer. Tell me before you answer any question for me, do not modify my existing Codex/ChatGPT app, and ask me only when something needs my input.
+
+The repository carries instructions for assistants in [AGENTS.md](AGENTS.md).
+
+### Keep it up to date, or remove it
+
+- **Update** after the Codex app updates: run the same line again. It replaces the copy, keeps your
+  accounts and chats, and leaves a backup. Windows 11 and the Store update the official app often;
+  the router is a separate copy and keeps working until you rebuild it.
+- **Remove** it: see [Uninstall](#uninstall).
+- **Something wrong?** Run the read-only [doctor](#when-something-goes-wrong) and
+  [open an issue](https://github.com/Mvnshi/codex-subscription-router/issues/new/choose).
 
 ## Highlights
 
@@ -97,7 +148,23 @@ Read [the architecture](docs/ARCHITECTURE.md) for the request flow and
 
 ## Compatibility
 
-Codex Subscription Router currently targets:
+Supports the recorded official macOS builds `6396` through `12246`. Build `8109` is
+provisional: it patches, signs, launches and loads connected accounts, but
+routing and failover have not been exercised on it. See
+[the 8109 port notes](docs/BUILD-8109-PORT.md). Build `12246` patches, signs and
+launches, and passes account/usage/profile/plugin screens, routing on three
+accounts, failover and history-preserving account moves. Native desktop clicks,
+keyboard input and real reset redemption through the account API also passed. See
+[the 12246 port notes](docs/BUILD-12246-PORT.md). The Windows port supports the
+Microsoft Store build `26.930.3930.0` (app build `12947`), provisionally: it
+patches, launches beside the official app, and routes, switches and moves chats
+between two real subscriptions, and its usage sheet with per-account resets and
+per-account plugin connections work (checked live). Computer Use is off by default
+in OpenAI's Windows build and the router leaves that alone; ARM64 is built and
+tested in CI but not yet run on ARM64 hardware. See
+[the Windows port notes](docs/WINDOWS.md).
+
+Codex Router currently targets:
 
 | Component | Supported value |
 | --- | --- |
@@ -118,28 +185,28 @@ checks at run time.
 
 ## Requirements
 
+You need the official app. The installer takes care of the build tools.
+
 ### macOS
 
-- The official ChatGPT app installed at `/Applications/ChatGPT.app`
-- Xcode Command Line Tools
-- Go 1.26+
-- Node.js 22.12+ and npm
-- An Apple Development or Developer ID Application signing identity
-
-A team-backed signing identity is required for reliable Appshots and Computer
-Use permissions. Ad-hoc signing is intended only for diagnostics.
+- Apple silicon, and the official ChatGPT app at `/Applications/ChatGPT.app`
+- Xcode Command Line Tools, Go 1.26+, and Node.js 22.12+ with npm. The installer offers to
+  get them (Apple's installer for the first, Homebrew for the others).
+- An Apple Development or Developer ID Application signing identity is recommended: a
+  team-backed identity is required for reliable Appshots and Computer Use permissions. Without
+  one the installer offers an ad-hoc (basic) signature, which is fine for accounts, routing and
+  usage.
 
 ### Windows
 
-- 64-bit Windows (x64 tested; ARM64 builds natively but is not yet run on hardware)
-- The official ChatGPT/Codex desktop app installed from the **Microsoft Store**
-  (the package `OpenAI.Codex`; OpenAI ships the Windows app only this way). The
-  patcher finds it through the package registry, reads its files and copies them
-  to a normal folder; the Store package itself is never modified.
-- Go 1.26+ (`winget install --id GoLang.Go -e`)
-- Node.js 22.12+ and npm (`winget install --id OpenJS.NodeJS.LTS -e`)
-- Python 3.11+ (`winget install --id Python.Python.3.12 -e`)
-- git (`winget install --id Git.Git -e`)
+- 64-bit Windows 10 or 11 (x64 tested; ARM64 builds natively but is not yet run on hardware)
+- The official Codex desktop app installed from the **Microsoft Store** (the package
+  `OpenAI.Codex`; OpenAI ships the Windows app only this way). The patcher finds it through the
+  package registry, reads its files and copies them to a normal folder; the Store package itself
+  is never modified.
+- Go 1.26+, Node.js 22.12+ with npm, and Python 3.11+. If any is missing the installer offers to
+  install it with winget (`GoLang.Go`, `OpenJS.NodeJS.LTS`, `Python.Python.3.12`). Git is not
+  needed: without it the installer downloads the source as a zip.
 
 No signing identity is needed; the copy runs unsigned (see
 [the security model](docs/SECURITY-MODEL.md)). Windows' default configuration
@@ -150,7 +217,8 @@ anything.
 ## Install
 
 The commands in this section are for macOS; Windows follows in
-[Install on Windows](#install-on-windows).
+[Install on Windows](#install-on-windows). The quick version is under
+[Get started](#get-started); this is the detail.
 
 Run one command. It downloads or updates the source, installs the locked build
 dependency, creates the independently signed app, and launches it:
@@ -165,6 +233,20 @@ same account state, creates a recoverable backup, and requires signing-team
 continuity so macOS privacy grants remain valid. It stops with a clear message
 instead of making a partial installation when a prerequisite or upstream
 compatibility check fails.
+
+It asks before it does anything on your behalf: install missing tools, build from a
+ChatGPT build newer than the ones the project has recorded (every patch step still checks the app
+and stops by itself if it changed), or sign without an Apple certificate. The questions are asked
+on the terminal, so the one-liner works. Where nobody can answer (an assistant running it for you),
+set the matching variable instead:
+
+| Variable | Effect |
+| --- | --- |
+| `CODEX_SUBSCRIPTION_ROUTER_ASSUME_YES=1` | Answer yes to every question |
+| `CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE=1` | Build from a ChatGPT build the project has not recorded |
+| `CODEX_SUBSCRIPTION_ROUTER_ALLOW_ADHOC_SIGNING=1` | Sign without an Apple certificate |
+| `CODEX_SUBSCRIPTION_ROUTER_NO_LAUNCH=1` | Build without opening the app |
+| `CODEX_SUBSCRIPTION_ROUTER_SOURCE_DIR` | Where the one-liner keeps its checkout |
 
 > [!TIP]
 > To inspect the installer before running it, open
@@ -237,10 +319,16 @@ dependencies, builds the independent copy, and launches it:
 irm https://raw.githubusercontent.com/Mvnshi/codex-subscription-router/main/install.ps1 | iex
 ```
 
-If the Store has updated the app to a build that is not recorded yet, the
-patcher stops with "the source version, build, or app.asar hash is not
-approved". The anchors are still checked, so you can opt in by setting the
-override in the same session first:
+Nothing needs to be installed first. When Go, Node.js or Python is missing the installer
+offers to install it with winget (Windows may ask you to allow each one), and it needs no Git:
+without Git it downloads the source as a zip. It asks before it does anything on your behalf, in
+plain words, and where nobody can answer (an assistant running it for you) it stops and names the
+setting that would answer for them.
+
+If the Store has updated the Codex app to a build the project has not recorded
+yet, the installer says so and asks whether to build from it anyway. Every
+patch step still checks the app and stops by itself if it changed, and the Codex
+app is never modified. Answering for it ahead of time:
 
 ```powershell
 $env:CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE = '1'
@@ -251,20 +339,21 @@ irm https://raw.githubusercontent.com/Mvnshi/codex-subscription-router/main/inst
 
 | Variable | Effect |
 | --- | --- |
-| `CODEX_SUBSCRIPTION_ROUTER_SOURCE_DIR` | Source checkout to use or create (default `%USERPROFILE%\.codex-subscription-router-mvnshi\source`) |
+| `CODEX_SUBSCRIPTION_ROUTER_ASSUME_YES=1` | Answer yes to every question (install missing tools, build from a newer app build) |
 | `CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE=1` | Pass `--allow-untested-source` to the patcher |
 | `CODEX_SUBSCRIPTION_ROUTER_NO_LAUNCH=1` | Build without launching the app |
+| `CODEX_SUBSCRIPTION_ROUTER_NO_DESKTOP_SHORTCUT=1` | Create the Start menu shortcut but not the Desktop one |
+| `CODEX_SUBSCRIPTION_ROUTER_SOURCE_DIR` | Source checkout to use or create (default `%USERPROFILE%\.codex-subscription-router-mvnshi\source`) |
 
 From a downloaded copy or a clone the same options are parameters:
-`powershell -ExecutionPolicy Bypass -File .\install.ps1 [-SourceDir <path>] [-AllowUntestedSource] [-NoLaunch]`.
+`powershell -ExecutionPolicy Bypass -File .\install.ps1 [-SourceDir <path>] [-AllowUntestedSource] [-NoLaunch] [-Yes] [-NoDesktopShortcut]`.
+Double-clicking `install-windows.cmd` in a downloaded copy does the same with no parameters.
 
-The installer refuses elevated sessions, checks git, Go 1.26+, Node.js 22.12+,
-npm, and Python 3.11+ (`python`, then `py -3`), stops the copy's processes and
-passes `--force` on an existing installation, and stops with a clear message
-instead of a partial installation when a check fails. When a tool is missing
-the message lists the `winget install` command for each one; open a new
-PowerShell window afterwards so `PATH` is refreshed. It does not check for the
-official app itself; the patcher discovers and verifies that.
+The installer refuses elevated sessions, stops the copy's processes and passes `--force` on an
+existing installation, and stops with a clear message instead of a partial installation when a
+check fails. It asks the patcher about the Codex app (`--check-source`) before it stops or builds
+anything, so answering no leaves a running router alone. It does not check for the official app
+itself; the patcher discovers and verifies that.
 
 > [!TIP]
 > To inspect the installer before running it, open
@@ -281,10 +370,12 @@ leaves a half-installed copy behind.
 
 | Message or symptom | What to do |
 | --- | --- |
-| `missing prerequisites: ...` | Run the `winget install` lines it prints, open a **new** PowerShell window (so `PATH` refreshes), rerun. |
+| `missing prerequisites: ...` | The installer offers to install them itself. If winget is missing or nobody could be asked, run the `winget install` lines it prints, open a **new** PowerShell window (so `PATH` refreshes), rerun. |
+| "The Codex app on this PC is newer than the versions this project has tested" | Not an error: answer **Y** to build from it anyway. The patch stops by itself if the app changed in a way it does not cover. |
+| Two Codex icons in the taskbar and tray | The router has its own icon (a dark tile with a route that splits in two); the other one is the normal Codex app. |
 | `expected exactly one official install, found 0` | Install the ChatGPT/Codex desktop app from the Microsoft Store, open it once, rerun. If it is installed somewhere unusual, pass `--source "<its app directory>"`. |
 | `expected exactly one official install, found 2` | Two installs were found (for example Store and a manual copy). Pass `--source` with the one to use. |
-| `the source version, build, or app.asar hash is not approved` | The Store updated the app to a build the project has not recorded. The anchors are still checked, so you can opt in with `CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE=1` (installer) or `--allow-untested-source` (patcher). |
+| `the source version, build, or app.asar hash is not approved` | The Store updated the app to a build the project has not recorded. The installer asks whether to continue (answer yes); the anchors are still checked. To answer ahead of time use `CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE=1` (installer) or `--allow-untested-source` (patcher). |
 | An error naming an anchor (`expected N ... found M`, `could not find ...`) | That Store build changed in a way the patch does not cover yet. Stop, keep the printed `Source ... version` line, and open an issue; do not loosen the check. |
 | `quit the running app before replacing it` | Close Codex Subscription Router (the installer does this itself), then rerun. The official app can stay open. |
 | `the copied app would contain paths of N characters` | Windows long paths are off and a path is still too long. Either enable `LongPathsEnabled` (elevated PowerShell, then sign out and in) or pass a short `--destination`, for example `C:\CSR`. |
@@ -314,7 +405,11 @@ This creates:
   `codex.real.exe`
 - an independent desktop profile under `%APPDATA%\Codex Subscription Router`
 - router state, backups, and the control token under `%USERPROFILE%\.codex-mux`
-- a Start menu shortcut (`--no-shortcut` skips it)
+- a **Codex Router** shortcut in the Start menu and on the Desktop, with the router's own icon
+  (`--no-desktop-shortcut` skips the Desktop one, `--no-shortcut` both). The old shortcut name,
+  "Codex Subscription Router", is removed when it points at this copy.
+- the router's own icons for the window and the notification-area icon, so it can be told apart
+  from the official app
 
 The patcher prints the source identity (`ProductVersion`, `FileVersion`,
 architecture, signature state, and `app.asar` SHA-256) before changing
@@ -466,6 +561,34 @@ On Windows, quit Codex Subscription Router, then run
 only for an unrecorded build). The previous copy moves to a timestamped directory
 under `%USERPROFILE%\.codex-mux\backups`; the same state and credential rules
 apply.
+
+## When something goes wrong
+
+Run the read-only doctor. It prints your Windows or macOS and tool versions, the Codex app build and
+whether the project has recorded it, whether the router is installed and running, and what its
+accounts look like. It never prints emails, tokens or chats, so you can paste the result into an
+[issue](https://github.com/Mvnshi/codex-subscription-router/issues/new/choose).
+
+```powershell
+irm https://raw.githubusercontent.com/Mvnshi/codex-subscription-router/main/scripts/doctor.ps1 | iex
+```
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Mvnshi/codex-subscription-router/main/scripts/doctor.sh | /bin/bash
+```
+
+## Uninstall
+
+The official app is untouched by installing, so removing the router never affects it.
+
+- **Windows.** From a clone or a downloaded copy, `powershell -ExecutionPolicy Bypass -File
+  scripts\uninstall.ps1` removes the app and its shortcuts and says what it removed. Add `-WhatIf`
+  to preview, `-RemoveAccounts` to also delete the router's other subscriptions' sign-ins and chat
+  ownership (`%USERPROFILE%\.codex-mux`), and `-RemoveBackups` for the old rebuild backups
+  (about 2 GB each). Your normal Codex data in `%USERPROFILE%\.codex` is never touched.
+- **macOS.** Quit the router, then move `~/Applications/Codex Subscription Router.app` and
+  `~/Applications/Codex Subscription Router Computer Use.app` to the Trash. Account state stays in
+  `~/.codex-mux` and `~/Library/Application Support/Codex Subscription Router` until you delete them.
 
 ## Local data and security
 

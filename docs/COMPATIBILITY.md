@@ -105,20 +105,52 @@ breakages of the router (ignoring usage-limit notifications, forgetting the new
 owner after a move, skipping the capacity check, moving a chat without its
 history) were each caught by them.
 
+Resets, plugins and Computer Use, live. The real window was driven through the
+app's own UI-test bridge and its debug port, with simulated reset balances on both
+accounts so that no real credit could be touched:
+
+- the Usage sheet lists each subscription with its plan and reset count, switches
+  the selected account, and shows that account's windows and resets
+- "Use reset" asks for the in-app confirmation, then the router's own "Ask me"
+  confirmation naming the account; pressing OK took one reset from the selected
+  account (2 to 1) and left the other account's balance alone
+- Settings, then Plugins, shows the "Plugin connections" picker; choosing
+  Subscription 2 scoped the page to it ("Connection access below is for
+  Subscription 2") and the app count changed from 8 to 12. Through the protocol,
+  `mcpServerStatus/list` scoped to each account came back with different lists
+  (5 and 2 entries)
+- the Computer Use helper starts from the copy and lists windows; see
+  [WINDOWS.md](WINDOWS.md) for what the Windows build does and does not read
+
+Two things the check found. A plugin request scoped to an account that was
+removed or paused used to be answered by Primary, so a stale picker could show
+or start a login for the wrong account; it now fails with an error, covered by
+`internal/mux/plugin_scope_e2e_test.go`. And the bridge's account-row matcher
+missed a row whose plan name ends in a letter ("Pro 5x1 reset available"); fixed.
+`app/list` could not be compared per account through the protocol because the
+ChatGPT connectors endpoint answered 403 to the unmodified engine too.
+
 Not yet exercised on Windows:
 
 - the reactive path against the real engine, where a turn is sent to an account
   that then reports its limit. The router's usage check moves chats first, and
   the preview mode can only make accounts look spent, not healthy, so only the
   automated tests cover it
-- reset redemption (it spends a real credit), plugin account scoping, Computer
-  Use and ARM64
+- a real reset redemption: it spends a credit, and the account had none worth
+  using (it was at 0% used). The code is the same Go HTTP call the macOS build ran
+  against the real API; only the Windows window around it was exercised
+- a model-driven Computer Use turn (the helper reports every open window's title
+  to the model, which was not asked for), and Computer Use being off by default in
+  OpenAI's Windows build
+- the patched app on ARM64 hardware. The multiplexer and launcher are built for
+  the architecture of the official host, and CI runs the Go tests on a real
+  `windows-11-arm` runner and checks both come out as ARM64
 - how the engine sandboxes commands without the Store's sandbox service
 
 Run [SMOKE-TEST.md](SMOKE-TEST.md) to complete them.
 
 | Component | Tested value |
 | --- | --- |
-| Architecture | `x64` (`arm64` untested) |
+| Architecture | `x64` (`arm64`: programs built and tested in CI, app not run on ARM64 hardware) |
 
 The procedure for recording further builds is in [WINDOWS.md](WINDOWS.md).

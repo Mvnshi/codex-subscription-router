@@ -18,11 +18,11 @@ Differences from the macOS patcher (scripts/patch_app.py), on purpose:
   INTEGRITY/ELECTRONASAR resource of the copied Electron executable drops
   its Authenticode signature, so the copy runs unsigned (SmartScreen may
   warn once).
-- Computer Use identity is not patched and the managed Computer Use service
-  is not pinned: the package ships a Windows helper that the copy starts, but
-  none has been verified here. The copy is pointed at a named pipe the official app never
-  uses (a fixed prefix plus a fresh UUID per launch) so the two builds cannot
-  share a helper by accident and no other local account can pre-create it.
+- Computer Use is not patched. The Windows helper is started by the app's
+  own node runtime as a child process over stdio, so there is no service,
+  socket or identity to re-point; the copy follows whatever the official app
+  does (the feature is off unless CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE=1
+  is set in the environment).
 - The launcher is a Go program (cmd/codex-router-launcher) built as
   "Codex Subscription Router.exe" beside the Electron executable.
 - The URL scheme is retargeted in the main-process bundles (Windows registers
@@ -72,13 +72,12 @@ INTEGRITY_ASAR_FILE = "resources\\app.asar"
 PROTOCOL_SCHEME = "codex-subscription-router"
 DEFAULT_ELECTRON_EXECUTABLE_NAME = "ChatGPT.exe"
 START_MENU_SHORTCUT_NAME = f"{DESTINATION_DIRECTORY_NAME}.lnk"
-# Prefix only: the Windows pipe namespace is machine-global with no per-user
-# scope, so a fixed name could be pre-created by any other local account and
-# answered as a fake helper (the macOS socket gets its protection from the
-# 0700 state root instead). The prelude appends a UUID drawn per launch, so the
-# full name cannot be pre-created, and once the copy has created it the default
-# pipe DACL denies other users FILE_CREATE_PIPE_INSTANCE.
-COMPUTER_USE_PIPE_PREFIX = r"\\.\pipe\codex-subscription-router-computer-use-"
+# Go's GOARCH for the machine type of the official host executable, as
+# scripts/win/exe-info.mjs reports it. The multiplexer and launcher run next to
+# that host, so they are built for its architecture rather than whatever the
+# machine's Go happens to default to (an emulated x64 toolchain on an ARM64 PC
+# would otherwise produce x64 programs).
+GO_ARCHITECTURES = {"x64": "amd64", "arm64": "arm64"}
 LONG_PATHS_REGISTRY_KEY = (
     "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem\\LongPathsEnabled"
 )
@@ -611,24 +610,30 @@ def verify_unpacked_identical(original_text: str, repacked_text: str) -> None:
 
 
 def windows_desktop_profile_prelude() -> str:
-    """Environment inserted before the userData rewrite on Windows.
+    """Environment inserted before the userData rewrite on Windows: none.
 
-    There is no verified Computer Use helper on Windows, so instead of
-    sharing the official app's pipe the copy is pointed at a named pipe the
-    official app never uses; the canonical-refresh skip keeps the copy from
-    rewriting a helper it does not own. The pipe name is COMPUTER_USE_PIPE_PREFIX
-    plus a UUID drawn when the copy starts (see the constant for why), computed
-    in the bootstrap bundle with globalThis.crypto because that bundle is ESM
-    and has no require. The emitted text is deterministic; only the value the
-    running copy sees changes per process, and every child it spawns inherits
-    that value through the environment.
+    The macOS copy pins its Computer Use helper's socket and stops the official
+    refresh from rewriting a helper it does not own. Windows has neither: in the
+    Store build SKY_CUA_SERVICE_NATIVE_PIPE_PATH and
+    CODEX_ELECTRON_SKIP_COMPUTER_USE_CANONICAL_REFRESH are only read on the
+    `darwin` platform, and the Windows client of @oai/sky starts its helper as a
+    child process over stdio, with no pipe or service to share. Setting them
+    would do nothing while implying a protection that does not exist.
     """
-    computer_use_pipe_prefix = json.dumps(COMPUTER_USE_PIPE_PREFIX)
-    return (
-        f"process.env.SKY_CUA_SERVICE_NATIVE_PIPE_PATH={computer_use_pipe_prefix}"
-        "+globalThis.crypto.randomUUID();"
-        "process.env.CODEX_ELECTRON_SKIP_COMPUTER_USE_CANONICAL_REFRESH=`1`;"
-    )
+    return ""
+
+
+def go_architecture(machine: object) -> str:
+    """Go's GOARCH for the machine type exe-info reported for the host."""
+    architecture = GO_ARCHITECTURES.get(str(machine))
+    if architecture is None:
+        raise RuntimeError(
+            f"the official app's host executable is built for {machine!r}; "
+            "this patcher builds the multiplexer and launcher for "
+            + " and ".join(sorted(GO_ARCHITECTURES))
+            + " only"
+        )
+    return architecture
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1225,6 +1230,7 @@ def patch_app(
     original_listing = asar_output([*asar, "list", "--is-pack", str(source_asar)])
     patterns = unpack_patterns(original_listing)
     info = exe_info(electron_exe)
+    goarch = go_architecture(info.get("machine"))
     source_asar_hash = file_sha256(source_asar)
     identity = source_identity(info, source_asar_hash)
     print(
@@ -1257,12 +1263,13 @@ def patch_app(
         print("Copying the official app…")
         shutil.copytree(source, stage, symlinks=False)
         print("Building multiplexer…")
-        shared.build_go_program(mux, "./cmd/codex-mux", goos="windows")
+        shared.build_go_program(mux, "./cmd/codex-mux", goos="windows", goarch=goarch)
         print("Building launcher…")
         shared.build_go_program(
             stage / LAUNCHER_EXECUTABLE_NAME,
             "./cmd/codex-router-launcher",
             goos="windows",
+            goarch=goarch,
             ldflags=ldflags,
         )
 

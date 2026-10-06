@@ -86,11 +86,13 @@ async function runAction(window, action, delayMs) {
     await new Promise((resolve) => setTimeout(resolve, Math.max(delayMs, 1_500)));
     return;
   }
+  // The row's plan and count are adjacent elements, so its text reads like
+  // "Primary · Pro 5x1 reset available"; the count is matched without \b.
   if (action === "usage-select-with-reset") {
     const selectionState = await window.webContents.executeJavaScript(`new Promise((resolve) => {
       const read=()=>{const buttons=[...document.querySelectorAll('button[aria-pressed]')]
         .filter(button=>/resets? (?:available|unavailable)/i.test(button.textContent??''));
-        const target=buttons.find(button=>/\\b[1-9]\\d* resets? available\\b/i.test(button.textContent??''));
+        const target=buttons.find(button=>/(?<!\\d)[1-9]\\d* resets? available\\b/i.test(button.textContent??''));
         return {buttons,target,pressed:target?.getAttribute('aria-pressed')??null};};
       let state=read();
       if(!state.target){resolve({found:false,pressed:null});return;}

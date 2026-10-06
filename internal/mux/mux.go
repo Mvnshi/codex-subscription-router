@@ -304,13 +304,20 @@ func (m *Multiplexer) routeNewThread(message protocol.Message) {
 func (m *Multiplexer) routeExistingRequest(message protocol.Message) {
 	accountID := ""
 	if scopedAccountID, cleanedParams, ok := scopedPluginRequest(message.Method, message.Params); ok {
-		if account, exists := m.store.Account(scopedAccountID); exists && account.Enabled {
-			message.Params = cleanedParams
-			if err := m.forward(scopedAccountID, message); err != nil {
-				m.write(protocol.Failure(message.ID, -32023, err.Error()))
-			}
+		// A scoped request names the account whose connections the caller means to
+		// read or change (an OAuth login included). Answering it from another
+		// account's engine would show or change the wrong account, so an account
+		// that was removed or paused is an error, not a fall-through.
+		account, exists := m.store.Account(scopedAccountID)
+		if !exists || !account.Enabled {
+			m.write(protocol.Failure(message.ID, -32025, fmt.Sprintf("account %s is not available (removed or paused)", scopedAccountID)))
 			return
 		}
+		message.Params = cleanedParams
+		if err := m.forward(scopedAccountID, message); err != nil {
+			m.write(protocol.Failure(message.ID, -32023, err.Error()))
+		}
+		return
 	}
 	threadID := threadIDFromParams(message.Params)
 	if threadID != "" {

@@ -141,6 +141,14 @@ func TestFailoverHelperProcess(t *testing.T) {
 			reply(request.ID, map[string]any{"data": []any{}, "nextCursor": nil})
 		case "thread/archive", "thread/unarchive":
 			reply(request.ID, map[string]any{})
+		case "mcpServerStatus/list", "app/list":
+			// Names the engine that answered and echoes what it was sent, so a test
+			// can see which account served a scoped request and that the routing
+			// marker never reached the engine's strict schema.
+			reply(request.ID, map[string]any{
+				"data":     []any{map[string]any{"name": label}},
+				"received": string(request.Params),
+			})
 		case "turn/start":
 			path, ok := threads[params.ThreadID]
 			if !ok {

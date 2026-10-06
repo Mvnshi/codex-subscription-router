@@ -279,7 +279,8 @@ multiplexer with a message naming its source.
 | Asar CLI invocation | `node_modules/.bin/asar` (POSIX symlink to `asar.mjs`) | `node node_modules\@electron\asar\bin\asar.mjs`; the `.cmd` shim is never used |
 | Path length | not a concern | the copy is staged under `<Programs>\.csr-XXXXXXXX\app` (short on purpose); the projected longest path is checked against `MAX_PATH` (260) and `LongPathsEnabled=1` is required only beyond it |
 | Installer | `install.sh` | `install.ps1` |
-| Shortcut | Launch Services registration | Start menu `.lnk` via `WScript.Shell`; failure is a warning |
+| Launch | Launch Services registration; the app keeps its bundle name | Start menu and Desktop `.lnk` named **Codex Router** via `WScript.Shell`, with the router's own icon; the old name is removed when it points at this launcher; failure is a warning |
+| Icons | the official ones | the window and tray icons are plain files beside `app.asar` (`resources\chatgpt-app-{dark,light}.ico`, `chatgpt-tray-{dark,light}.ico`, looked up by name from `process.resourcesPath`); the copy gets the router's own (`assets/windows`, drawn by `scripts/make_icons.py` from the website mark) under those names, so the taskbar and notification area tell the two apps apart |
 
 ## Layout the patcher produces
 
@@ -294,7 +295,9 @@ multiplexer with a message naming its source.
     ├── codex.exe                     the multiplexer (cmd/codex-mux)
     └── codex.real.exe                the official binary, renamed
 %APPDATA%\Codex Subscription Router\  Chromium / Electron profile
-%APPDATA%\Microsoft\Windows\Start Menu\Programs\Codex Subscription Router.lnk
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Codex Router.lnk  and  Desktop\Codex Router.lnk
+<destination>\Codex Router.ico       the shortcuts' icon; the window and tray icons are
+                                      replaced in resources\ with the router's own
 %USERPROFILE%\.codex-mux\             state root (icacls-hardened); backups\<timestamp>\
 %USERPROFILE%\.codex                  Primary account, owned by the official app
 ```
@@ -393,8 +396,19 @@ Every step stops the install on failure; the list is in execution order.
     either move fails, the previous install is left where it is or moved back
     from the backup, and the staged copy is discarded with the temporary
     directory; nothing is parked under a `failed-install` directory any more.
-16. **Shortcut.** Best effort; a failure is a warning because the install is
-    already launchable.
+16. **Icons.** The router's three icon files replace the official window and
+    tray icons that the staged copy ships (only files that exist are replaced) and
+    `Codex Router.ico` is placed beside the launcher for the shortcuts. A missing
+    router icon in the repository is an error, since all three are tracked.
+17. **Shortcuts.** One PowerShell command creates the Start menu shortcut and, unless
+    `--no-desktop-shortcut`, the Desktop one (the Desktop folder is asked of Windows
+    because it can be redirected, and a missing one is skipped), and removes a
+    `Codex Subscription Router.lnk` whose target is this launcher. Best effort; a
+    failure is a warning because the install is already launchable.
+
+`--check-source` stops after step 6 (source discovery and approval) without copying or
+building anything and exits 3 when the build is not recorded, 0 otherwise, 1 for any
+other failure. `install.ps1` runs it first and asks the person before going on.
 
 ## Unverified assumptions
 
@@ -521,7 +535,9 @@ app's code (`role: quit`); clicking it was not exercised.
   and the unsigned Go binaries is untested.
 - Taskbar grouping: pins point at `Codex Subscription Router.exe` while the
   window belongs to the Electron executable; without a shared AppUserModelID
-  Windows may show two taskbar entries.
+  Windows may show two taskbar entries. The running window carries the router's own
+  icon (read back from the window with `WM_GETICON`), so it is distinguishable from
+  the official app either way.
 - **Observed.** The launcher started the sibling host executable with the
   copy's profile. Its `MessageBoxW` and exit-code propagation were
   cross-compiled and vetted, not executed.

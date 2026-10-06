@@ -24,6 +24,9 @@ def make_app(root: Path, *executables: str, unpacked: dict | None = None) -> Pat
     root.mkdir(parents=True, exist_ok=True)
     (root / "resources").mkdir(exist_ok=True)
     (root / "resources" / "app.asar").write_bytes(b"asar")
+    # The window and tray icons the official app ships beside its archive.
+    for icon in ("chatgpt-app-dark.ico", "chatgpt-app-light.ico", "chatgpt-tray-dark.ico", "chatgpt-tray-light.ico"):
+        (root / "resources" / icon).write_bytes(b"official icon")
     for name in executables:
         (root / name).write_bytes(b"MZ")
     if unpacked is not None:
@@ -642,9 +645,11 @@ class ApproveSourceTests(unittest.TestCase):
     IDENTITY = win.SourceIdentity("1.0.0.0", "1.0.0.0", "ChatGPT", True, "ab" * 32)
 
     def test_empty_table_requires_the_flag(self):
-        with self.assertRaises(RuntimeError) as caught:
+        with self.assertRaises(win.UntestedSourceError) as caught:
             win.approve_source(self.IDENTITY, False)
         self.assertIn("--allow-untested-source", str(caught.exception))
+        # Still a RuntimeError, so callers that only know that keep working.
+        self.assertIsInstance(caught.exception, RuntimeError)
         with mock.patch.object(win.sys, "stderr") as stderr:
             win.approve_source(self.IDENTITY, True)
         self.assertTrue(stderr.write.called)
@@ -1111,10 +1116,34 @@ class CommandCompositionTests(unittest.TestCase):
         command = win.shortcut_command(launcher, Path("/appdata/Start Menu/Programs/It's.lnk"))
         script = command[4]
         self.assertIn("WScript.Shell", script)
-        self.assertIn(f"CreateShortcut('{Path('/appdata/Start Menu/Programs/It' + chr(39) * 2 + 's.lnk')}')", script)
+        self.assertIn(f"Save-Shortcut '{Path('/appdata/Start Menu/Programs/It' + chr(39) * 2 + 's.lnk')}'", script)
         self.assertIn(f"TargetPath = '{launcher}'", script)
         self.assertIn(f"WorkingDirectory = '{launcher.parent}'", script)
+        self.assertIn("Description = 'Codex with all your subscriptions'", script)
         self.assertIn("Save()", script)
+        # Nothing optional unless asked for.
+        self.assertNotIn("IconLocation", script)
+        self.assertNotIn("Desktop", script)
+        self.assertNotIn("Remove-Item", script)
+
+    def test_shortcut_command_with_icon_desktop_and_legacy_cleanup(self):
+        launcher = Path("/lad/Programs/Codex Subscription Router/Codex Subscription Router.exe")
+        icon = Path("/lad/Programs/Codex Subscription Router/Codex Router.ico")
+        legacy = Path("/appdata/Start Menu/Programs/Codex Subscription Router.lnk")
+        script = win.shortcut_command(
+            launcher, Path("/appdata/Start Menu/Programs/Codex Router.lnk"),
+            icon_path=icon, desktop=True, legacy_path=legacy,
+        )[4]
+        self.assertIn(f"IconLocation = '{icon},0'", script)
+        # The Desktop folder comes from Windows (it can be redirected), under the display name.
+        self.assertIn("[Environment]::GetFolderPath('Desktop')", script)
+        self.assertIn("'Codex Router.lnk'", script)
+        # No Desktop folder means no Desktop shortcut, not a failed script.
+        self.assertIn("if ($desktopFolder)", script)
+        # The old shortcut is only removed when it points at this launcher.
+        self.assertIn(f"Test-Path -LiteralPath '{legacy}'", script)
+        self.assertIn(f"CreateShortcut('{legacy}').TargetPath -eq '{launcher}'", script)
+        self.assertIn(f"Remove-Item -LiteralPath '{legacy}'", script)
 
     def test_current_username_prefers_domain(self):
         self.assertEqual(win.current_username({"USERNAME": "me", "USERDOMAIN": "PC"}), "PC\\me")
@@ -1123,8 +1152,56 @@ class CommandCompositionTests(unittest.TestCase):
     def test_start_menu_shortcut_path(self):
         self.assertEqual(
             win.start_menu_shortcut_path({"APPDATA": "/appdata"}),
-            Path("/appdata/Microsoft/Windows/Start Menu/Programs/Codex Subscription Router.lnk"),
+            Path("/appdata/Microsoft/Windows/Start Menu/Programs/Codex Router.lnk"),
         )
+        self.assertEqual(win.LEGACY_SHORTCUT_NAME, "Codex Subscription Router.lnk")
+        with self.assertRaises(RuntimeError):
+            win.start_menu_shortcut_path({})
+
+    def test_install_icons_replaces_only_the_files_the_app_ships(self):
+        stage = Path(tempfile.mkdtemp())
+        resources = stage / "resources"
+        resources.mkdir()
+        for name in ("chatgpt-app-dark.ico", "chatgpt-tray-dark.ico", "chatgpt-tray-light.ico", "unrelated.ico"):
+            (resources / name).write_bytes(b"official")
+        replaced = win.install_icons(stage)
+        # chatgpt-app-light.ico is not shipped here, so it is not created.
+        self.assertEqual(sorted(replaced), ["chatgpt-app-dark.ico", "chatgpt-tray-dark.ico", "chatgpt-tray-light.ico"])
+        self.assertFalse((resources / "chatgpt-app-light.ico").exists())
+        self.assertEqual((resources / "unrelated.ico").read_bytes(), b"official")
+        directory = win.ICON_DIRECTORY
+        self.assertEqual((resources / "chatgpt-app-dark.ico").read_bytes(), (directory / "codex-router.ico").read_bytes())
+        # Dark theme gets the white glyph, light theme the dark one, like the official files.
+        self.assertEqual(
+            (resources / "chatgpt-tray-dark.ico").read_bytes(), (directory / "codex-router-tray-dark.ico").read_bytes()
+        )
+        self.assertEqual(
+            (resources / "chatgpt-tray-light.ico").read_bytes(), (directory / "codex-router-tray-light.ico").read_bytes()
+        )
+        self.assertEqual((stage / "Codex Router.ico").read_bytes(), (directory / "codex-router.ico").read_bytes())
+
+    def test_install_icons_refuses_a_missing_router_icon(self):
+        stage = Path(tempfile.mkdtemp())
+        (stage / "resources").mkdir()
+        empty = Path(tempfile.mkdtemp())
+        with mock.patch.object(win, "ICON_DIRECTORY", empty), self.assertRaises(RuntimeError) as caught:
+            win.install_icons(stage)
+        self.assertIn("missing router icon", str(caught.exception))
+
+    def test_committed_icons_are_valid_icon_files(self):
+        for name in ("codex-router.ico", "codex-router-tray-dark.ico", "codex-router-tray-light.ico"):
+            data = (win.ICON_DIRECTORY / name).read_bytes()
+            reserved, kind, count = struct.unpack("<HHH", data[:6])
+            self.assertEqual((reserved, kind), (0, 1), name)
+            self.assertGreaterEqual(count, 5, name)
+            for index in range(count):
+                width, height, _, _, _, bits, length, offset = struct.unpack("<BBBBHHII", data[6 + 16 * index : 22 + 16 * index])
+                self.assertEqual(width, height, name)
+                self.assertEqual(bits, 32, name)
+                self.assertLessEqual(offset + length, len(data), name)
+                frame = data[offset : offset + length]
+                # 256 px frames are PNG, smaller ones classic bitmaps.
+                self.assertEqual(frame[:8] == b"\x89PNG\r\n\x1a\n", width == 0, f"{name} frame {index}")
 
 
 class ArgumentTests(unittest.TestCase):
@@ -1137,6 +1214,29 @@ class ArgumentTests(unittest.TestCase):
         self.assertIsNone(args.electron_executable)
         self.assertIsNone(args.codex_executable)
         self.assertFalse(args.no_shortcut)
+        self.assertFalse(args.no_desktop_shortcut)
+
+    def test_check_source_flag(self):
+        self.assertFalse(win.parse_args([]).check_source)
+        self.assertTrue(win.parse_args(["--check-source"]).check_source)
+
+    def test_main_exits_3_only_for_an_unrecorded_build(self):
+        # install.ps1 asks the person on 3 and treats every other failure as final.
+        self.assertEqual(win.UNTESTED_SOURCE_EXIT_CODE, 3)
+        with mock.patch.object(win, "patch_app", side_effect=win.UntestedSourceError("not approved")), \
+             mock.patch.object(win.sys, "stderr") as stderr:
+            self.assertEqual(win.main(["--check-source"]), 3)
+        # Only checking: a question for the person, not a failure.
+        printed = "".join(str(call.args[0]) for call in stderr.write.call_args_list)
+        self.assertIn("not approved", printed)
+        self.assertNotIn("patch failed", printed)
+        with mock.patch.object(win, "patch_app", side_effect=win.UntestedSourceError("not approved")), \
+             mock.patch.object(win.sys, "stderr") as stderr:
+            self.assertEqual(win.main([]), 3)
+        self.assertIn("patch failed: not approved", "".join(str(call.args[0]) for call in stderr.write.call_args_list))
+        with mock.patch.object(win, "patch_app", side_effect=RuntimeError("anchor changed")), \
+             mock.patch.object(win.sys, "stderr"):
+            self.assertEqual(win.main(["--check-source"]), 1)
 
     def test_main_reports_the_windows_guard_as_a_patch_failure(self):
         if sys.platform == "win32":
@@ -1612,7 +1712,7 @@ class PatchAppOrchestrationTests(unittest.TestCase):
 
     def run_patch(
         self, *, force=False, create_shortcut=True, source=None, codex_executable=None, store_candidates=(),
-        machine="x64",
+        machine="x64", desktop_shortcut=True, allow_untested=True, check_source_only=False,
     ):
         tools = FakeTools()
         tools.machine = machine
@@ -1637,7 +1737,10 @@ class PatchAppOrchestrationTests(unittest.TestCase):
              mock.patch.object(win.subprocess, "run", tools.subprocess_run), \
              mock.patch.object(win.sys, "platform", "win32"), \
              contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            win.patch_app(source, None, force, True, None, codex_executable, create_shortcut)
+            win.patch_app(
+                source, None, force, allow_untested, None, codex_executable, create_shortcut, desktop_shortcut,
+                check_source_only,
+            )
         self.assertEqual(snapshot(self.source), before, "the official install was modified")
         tools.patch_renderer = patch_renderer
         tools.stdout, tools.stderr = out.getvalue(), err.getvalue()
@@ -1653,6 +1756,17 @@ class PatchAppOrchestrationTests(unittest.TestCase):
             (destination / "resources" / "app.asar.unpacked" / "node_modules" / "node-pty" / "pty.node").read_bytes(),
             b"repacked native",
         )
+        # The copy carries the router's icons, not the official ones, and the
+        # shortcut icon sits beside the launcher.
+        icons = win.ICON_DIRECTORY
+        self.assertEqual(
+            (destination / "resources" / "chatgpt-app-dark.ico").read_bytes(), (icons / "codex-router.ico").read_bytes()
+        )
+        self.assertEqual(
+            (destination / "resources" / "chatgpt-tray-light.ico").read_bytes(),
+            (icons / "codex-router-tray-light.ico").read_bytes(),
+        )
+        self.assertEqual((destination / "Codex Router.ico").read_bytes(), (icons / "codex-router.ico").read_bytes())
         self.assertEqual((destination / self.codex_relative).read_bytes(), b"MZ built ./cmd/codex-mux")
         self.assertEqual(
             (destination / self.codex_relative).with_name("codex.real.exe").read_bytes(), b"MZ official codex"
@@ -1735,9 +1849,35 @@ class PatchAppOrchestrationTests(unittest.TestCase):
         self.assertTrue(shortcut_dir.is_dir())
         shortcut_commands = [command for command in tools.run_commands if command[0] == "powershell"]
         self.assertEqual(len(shortcut_commands), 1)
-        self.assertIn(str(self.destination / "Codex Subscription Router.exe"), shortcut_commands[0][4])
-        self.assertIn(str(shortcut_dir / "Codex Subscription Router.lnk"), shortcut_commands[0][4])
+        script = shortcut_commands[0][4]
+        self.assertIn(str(self.destination / "Codex Subscription Router.exe"), script)
+        self.assertIn(f"Save-Shortcut '{shortcut_dir / 'Codex Router.lnk'}'", script)
+        self.assertIn(f"IconLocation = '{self.destination / 'Codex Router.ico'},0'", script)
+        self.assertIn("[Environment]::GetFolderPath('Desktop')", script)
+        # The shortcut older versions made is cleaned up, not left beside the new one.
+        self.assertIn(f"Remove-Item -LiteralPath '{shortcut_dir / 'Codex Subscription Router.lnk'}'", script)
         self.assertIn("Start menu shortcut:", tools.stdout)
+        self.assertIn("Gave the copy its own icons (chatgpt-app-dark.ico, chatgpt-app-light.ico, chatgpt-tray-dark.ico, chatgpt-tray-light.ico)", tools.stdout)
+
+    def test_check_source_stops_after_the_approval_without_touching_anything(self):
+        tools = self.run_patch(check_source_only=True)
+        self.assertIn("Source check passed", tools.stdout)
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(self.state_root.exists())
+        self.assertEqual(tools.builds, [])
+        self.assertFalse(any(command[0] in {"icacls", "powershell"} for command in tools.run_commands))
+
+    def test_check_source_reports_an_unrecorded_build_before_touching_anything(self):
+        with self.assertRaises(win.UntestedSourceError):
+            self.run_patch(check_source_only=True, allow_untested=False)
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(self.state_root.exists())
+
+    def test_desktop_shortcut_can_be_skipped_on_its_own(self):
+        tools = self.run_patch(desktop_shortcut=False)
+        script = [command for command in tools.run_commands if command[0] == "powershell"][0][4]
+        self.assertIn("Codex Router.lnk", script)
+        self.assertNotIn("GetFolderPath", script)
 
     def test_force_backs_up_the_previous_install_after_the_process_check(self):
         make_app(self.destination, "ChatGPT.exe")

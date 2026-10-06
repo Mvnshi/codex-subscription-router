@@ -1,2 +1,5 @@
 * text=auto eol=lf
 *.png binary
+
+# Batch files need CRLF line endings to be read reliably by cmd.exe.
+*.cmd text eol=crlf

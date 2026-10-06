@@ -1,5 +1,7 @@
 """Signing regression tests; no signing certificate or macOS tools required."""
+import contextlib
 import hashlib
+import io
 import struct
 import subprocess
 import tempfile
@@ -507,6 +509,50 @@ class GoBuildTests(unittest.TestCase):
         _, call = self.build("./cmd/codex-mux", goos="windows", goarch="arm64")
         self.assertEqual(call.kwargs["env"]["GOOS"], "windows")
         self.assertEqual(call.kwargs["env"]["GOARCH"], "arm64")
+
+
+class SourceCheckTests(unittest.TestCase):
+    """--check-source: decide about the official build before anything is built."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        root = Path(self.temporary.name)
+        self.source = root / "ChatGPT.app"
+        (self.source / "Contents" / "Resources").mkdir(parents=True)
+        (self.source / "Contents" / "Info.plist").write_bytes(
+            b'<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>'
+            b"<key>CFBundleShortVersionString</key><string>99.1.1</string>"
+            b"<key>CFBundleVersion</key><string>99999</string></dict></plist>"
+        )
+        (self.source / "Contents" / "Resources" / "app.asar").write_bytes(b"an unrecorded build")
+        self.destination = root / "Out" / "Codex Subscription Router.app"
+
+    def check(self, allow_untested):
+        with mock.patch.object(patch_app, "require_tool", side_effect=AssertionError("tools must not be probed")),              contextlib.redirect_stdout(io.StringIO()):
+            patch_app.patch_app(
+                self.source, self.destination, False, False, allow_untested, False, check_source_only=True
+            )
+
+    def test_unrecorded_build_raises_the_dedicated_error(self):
+        with self.assertRaises(patch_app.UntestedSourceError) as caught:
+            self.check(False)
+        self.assertIn("--allow-untested-source", str(caught.exception))
+        self.assertIsInstance(caught.exception, RuntimeError)
+
+    def test_allowing_it_passes_and_stops_before_building_anything(self):
+        with mock.patch.object(patch_app.sys, "stderr"):
+            self.check(True)
+        self.assertFalse(self.destination.parent.exists())
+
+    def test_main_exits_3_only_for_an_unrecorded_build(self):
+        self.assertEqual(patch_app.UNTESTED_SOURCE_EXIT_CODE, 3)
+        argv = ["patch_app.py", "--check-source", "--source", str(self.source), "--destination", str(self.destination)]
+        with mock.patch.object(patch_app.sys, "argv", argv), mock.patch.object(patch_app.sys, "stderr"),              contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(patch_app.main(), 3)
+        argv = ["patch_app.py", "--check-source", "--source", str(self.source / "missing"), "--destination", str(self.destination)]
+        with mock.patch.object(patch_app.sys, "argv", argv), mock.patch.object(patch_app.sys, "stderr"),              contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(patch_app.main(), 1)
 
 
 if __name__ == "__main__":

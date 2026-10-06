@@ -2,9 +2,15 @@
 Codex Subscription Router - Windows installer.
 
 This is the Windows counterpart of install.sh: it downloads or updates the
-source checkout, installs the locked build tools, builds the independent copy
-of the official desktop app with scripts\patch_app_windows.py, and launches it.
-The official installation is only read; it is never modified.
+source, installs the locked build tools, builds the independent copy of the
+official desktop app with scripts\patch_app_windows.py, and launches it. The
+official installation is only read; it is never modified.
+
+Nothing needs to be installed first. When Go, Node.js or Python is missing the
+installer offers to install it with winget (Windows asks for permission for each
+one), and it does not need Git: without Git it downloads the source as a zip.
+When the Store app is a newer build than the project has recorded, it explains
+that in plain words and asks before going on.
 
 Two ways to run it:
 
@@ -15,11 +21,18 @@ Two ways to run it:
        $env:CODEX_SUBSCRIPTION_ROUTER_SOURCE_DIR = 'D:\src\codex-subscription-router'  # optional
        $env:CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE = '1'                       # optional
        $env:CODEX_SUBSCRIPTION_ROUTER_NO_LAUNCH = '1'                                   # optional
+       $env:CODEX_SUBSCRIPTION_ROUTER_ASSUME_YES = '1'                                  # optional
+       $env:CODEX_SUBSCRIPTION_ROUTER_NO_DESKTOP_SHORTCUT = '1'                         # optional
        irm https://raw.githubusercontent.com/Mvnshi/codex-subscription-router/main/install.ps1 | iex
 
   2. From a clone or a downloaded copy, with ordinary parameters:
 
-       powershell -ExecutionPolicy Bypass -File .\install.ps1 [-SourceDir <path>] [-AllowUntestedSource] [-NoLaunch]
+       powershell -ExecutionPolicy Bypass -File .\install.ps1 [-SourceDir <path>] [-AllowUntestedSource]
+                  [-NoLaunch] [-Yes] [-NoDesktopShortcut]
+
+  -Yes answers the installer's questions (install missing tools, continue with a
+  newer app build) for you; without it, a session nobody can answer in stops with
+  the exact command or setting that would have answered the question.
 
   Environment variables are honoured in both styles. -SourceDir wins over the
   variable when both are given; the switches are enabled by either form. From a
@@ -37,7 +50,9 @@ Two ways to run it:
 param(
     [string]$SourceDir,
     [switch]$AllowUntestedSource,
-    [switch]$NoLaunch
+    [switch]$NoLaunch,
+    [switch]$Yes,
+    [switch]$NoDesktopShortcut
 )
 
 # Everything below, except the param() block above, lives in this script block. Under
@@ -49,9 +64,10 @@ param(
 # with the run in both invocation styles; the param() variables remain readable inside it, and
 # Fail's `exit`/`throw` work as before. The param() block itself has to stay outside, and no
 # scoping trick covers it: under `irm ... | iex` the parameter binder assigns $SourceDir,
-# $AllowUntestedSource and $NoLaunch in the caller's scope, so caller variables of those three
-# names that already exist are overwritten with the bound defaults ('' / False / False) and stay
-# that way after the run (when none exist beforehand, nothing is left behind).
+# $AllowUntestedSource, $NoLaunch, $Yes and $NoDesktopShortcut in the caller's scope, so caller
+# variables of those five names that already exist are overwritten with the bound defaults
+# ('' / False / False / False / False) and stay that way after the run (when none exist
+# beforehand, nothing is left behind).
 # The body is deliberately not indented: it is the whole installer.
 $installer = {
 Set-StrictMode -Version Latest
@@ -85,6 +101,26 @@ if (-not [string]::IsNullOrWhiteSpace($LocalAppDataDir)) {
     $Launcher = Join-Path -Path $DestinationDir -ChildPath 'Codex Subscription Router.exe'
 }
 $PatcherRelativePath = 'scripts\patch_app_windows.py'
+# The same source as `git clone --branch main`, for a PC without Git.
+$ArchiveUrl = 'https://github.com/Mvnshi/codex-subscription-router/archive/refs/heads/main.zip'
+# Marks a directory this installer filled from the archive, so it is only ever replaced
+# when it is one of ours.
+$SnapshotMarker = '.codex-router-source-snapshot'
+# Exit code of `patch_app_windows.py --check-source` when the app is a build the project has
+# not recorded (the patcher's UntestedSourceError).
+$UntestedSourceExitCode = 3
+$WingetPackages = [ordered]@{
+    go = 'GoLang.Go'
+    node = 'OpenJS.NodeJS.LTS'
+    npm = 'OpenJS.NodeJS.LTS'
+    python = 'Python.Python.3.12'
+}
+$FriendlyToolNames = @{
+    go = 'Go'
+    node = 'Node.js'
+    npm = 'Node.js'
+    python = 'Python'
+}
 $MinimumNodeVersion = [version]'22.12.0'
 $MinimumGoVersion = [version]'1.26.0'
 $MinimumPythonVersion = [version]'3.11.0'
@@ -103,6 +139,8 @@ $Options = [pscustomobject]@{
     SourceDirRequested = ((-not [string]::IsNullOrWhiteSpace($SourceDir)) -or (-not [string]::IsNullOrWhiteSpace($env:CODEX_SUBSCRIPTION_ROUTER_SOURCE_DIR)))
     AllowUntestedSource = ($AllowUntestedSource.IsPresent -or ($env:CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE -eq '1'))
     NoLaunch = ($NoLaunch.IsPresent -or ($env:CODEX_SUBSCRIPTION_ROUTER_NO_LAUNCH -eq '1'))
+    AssumeYes = ($Yes.IsPresent -or ($env:CODEX_SUBSCRIPTION_ROUTER_ASSUME_YES -eq '1'))
+    NoDesktopShortcut = ($NoDesktopShortcut.IsPresent -or ($env:CODEX_SUBSCRIPTION_ROUTER_NO_DESKTOP_SHORTCUT -eq '1'))
 }
 
 # Path of this file when it runs from disk (a clone, a download, or dot-sourcing); empty under
@@ -170,6 +208,26 @@ function Invoke-NativeCommand {
     if ($LASTEXITCODE -ne 0) {
         Fail "$Description failed with exit code $LASTEXITCODE."
     }
+}
+
+function Invoke-NativeCommandForExitCode {
+    <#
+    Like Invoke-NativeCommand, but returns the exit code instead of failing on a non-zero one,
+    for commands whose particular exit codes mean something to the caller (the patcher's
+    --check-source). A command that cannot be started at all still fails.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Description,
+        [Parameter(Mandatory = $true)][string]$Command,
+        [string[]]$Arguments = @()
+    )
+    $ErrorActionPreference = 'Continue'
+    $global:LASTEXITCODE = $null
+    & $Command @Arguments | Out-Host
+    if ($null -eq $LASTEXITCODE) {
+        Fail "$Description could not be started ('$Command' did not run)."
+    }
+    return [int]$LASTEXITCODE
 }
 
 function Get-NativeOutput {
@@ -312,12 +370,97 @@ function Resolve-PythonInterpreter {
     }
 }
 
+function Test-Interactive {
+    # True when a person can answer a question here: a real console whose input is not redirected
+    # (under `irm ... | iex` in a normal window it is; a script run by another program is not).
+    if (-not [Environment]::UserInteractive) {
+        return $false
+    }
+    try {
+        return (-not [Console]::IsInputRedirected)
+    } catch {
+        return $false
+    }
+}
+
+function Update-SessionPath {
+    # A tool installed a moment ago (by winget, say) is on the machine and user PATH but not on the
+    # PATH this session started with, which is why the installer used to say "open a new window".
+    # Merge the registry's current values in front of the session's, without repeating entries.
+    $merged = [System.Collections.Generic.List[string]]::new()
+    $values = @(
+        [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+        [Environment]::GetEnvironmentVariable('Path', 'User'),
+        $env:Path
+    )
+    foreach ($value in $values) {
+        foreach ($entry in ([string]$value -split ';')) {
+            $trimmed = $entry.Trim()
+            if ($trimmed -and -not ($merged | Where-Object { $_ -ieq $trimmed })) {
+                $merged.Add($trimmed)
+            }
+        }
+    }
+    $env:Path = $merged -join ';'
+}
+
+function Get-PrerequisiteStatus {
+    # Which build tools are absent. Git is not one of them: the source can come as a zip.
+    $missing = @()
+    foreach ($commandName in @('go', 'node', 'npm')) {
+        if (-not (Test-ApplicationCommand -Name $commandName)) {
+            $missing += $commandName
+        }
+    }
+    $python = Resolve-PythonInterpreter
+    if ($null -eq $python -or [string]::IsNullOrWhiteSpace($python.Command)) {
+        $missing += 'python'
+    }
+    return [pscustomobject]@{ Missing = [string[]]$missing; Python = $python }
+}
+
+function Install-MissingPrerequisite {
+    <#
+    Offers to install what is missing with winget, which ships with current Windows 10 and 11.
+    Windows asks the user to allow each installer (that prompt is Windows', not ours). Fails with
+    the exact commands when it cannot or may not do it.
+    #>
+    param([Parameter(Mandatory = $true)][string[]]$Missing)
+    $packages = @($Missing | ForEach-Object { $WingetPackages[$_] } | Select-Object -Unique)
+    $names = @($Missing | ForEach-Object { $FriendlyToolNames[$_] } | Select-Object -Unique)
+    $manualCommands = ($packages | ForEach-Object { "  winget install --id $_ -e" }) -join "`n"
+
+    Write-Host ''
+    Write-Host "This PC needs $($names -join ', ') to build Codex Router. They are free, open-source tools."
+    if (-not (Test-ApplicationCommand -Name 'winget')) {
+        Fail ("missing prerequisites: $($Missing -join ' '). winget (the Windows package manager, part of 'App Installer' in the Microsoft Store) was not found, so they cannot be installed automatically. " +
+            "Install Go 1.26+, Node.js 22.12+ (with npm) and Python 3.11+, then run this command again.")
+    }
+    if (-not $Options.AssumeYes) {
+        if (-not (Test-Interactive)) {
+            Fail ("missing prerequisites: $($Missing -join ' '). Nobody can be asked here, so nothing was installed. Either set `$env:CODEX_SUBSCRIPTION_ROUTER_ASSUME_YES = '1' (or pass -Yes) to let the installer install them with winget, or install them yourself and run this command again:`n$manualCommands")
+        }
+        $answer = Read-Host 'Install them now with winget? [Y/n]'
+        if ($answer -match '^\s*(n|no)\s*$') {
+            Fail "missing prerequisites: $($Missing -join ' '). Install them, then run this command again:`n$manualCommands"
+        }
+    }
+    foreach ($package in $packages) {
+        Write-Log "Installing $package"
+        Invoke-NativeCommand -Description "winget install $package" -Command 'winget' -Arguments @(
+            'install', '--id', $package, '-e', '--silent', '--accept-package-agreements', '--accept-source-agreements'
+        )
+    }
+    Update-SessionPath
+}
+
 function Assert-Prerequisite {
     <#
-    Fails closed on anything the build needs. Returns the resolved toolchain (which Python
-    invocation to use) so Main does not probe twice. The official desktop installation itself is
-    not checked here: its Windows layout is discovered and verified by scripts\patch_app_windows.py
-    with exact checks, and duplicating a guess here would only weaken that.
+    Fails closed on anything the build needs, installing missing tools first when allowed. Returns
+    the resolved toolchain (which Python invocation to use) so Main does not probe twice. The
+    official desktop installation itself is not checked here: its Windows layout is discovered and
+    verified by scripts\patch_app_windows.py with exact checks, and duplicating a guess here would
+    only weaken that.
     #>
     if (-not (Test-WindowsHost)) {
         Fail 'Codex Subscription Router supports Windows only.'
@@ -342,34 +485,16 @@ function Assert-Prerequisite {
         Fail "this installer is running as administrator. Codex Subscription Router installs per user under $DestinationDir; rerun it from a normal (non-elevated) PowerShell."
     }
 
-    $missing = @()
-    foreach ($commandName in @('git', 'go', 'node', 'npm')) {
-        if (-not (Test-ApplicationCommand -Name $commandName)) {
-            $missing += $commandName
+    $status = Get-PrerequisiteStatus
+    if ($status.Missing.Count -ne 0) {
+        Install-MissingPrerequisite -Missing $status.Missing
+        $status = Get-PrerequisiteStatus
+        if ($status.Missing.Count -ne 0) {
+            Fail ("installed what was missing, but $($status.Missing -join ' ') still cannot be found from this window. " +
+                'Close this PowerShell window, open a new one, and run the same command again.')
         }
     }
-    $python = Resolve-PythonInterpreter
-    if ($null -eq $python) {
-        $missing += 'python'
-    }
-    if ($missing.Count -ne 0) {
-        # winget ships with current Windows 10/11 and is the shortest route to each tool; npm comes
-        # with Node.js, so a missing node or npm maps to the same package.
-        $wingetPackages = [ordered]@{
-            git = 'Git.Git'
-            go = 'GoLang.Go'
-            node = 'OpenJS.NodeJS.LTS'
-            npm = 'OpenJS.NodeJS.LTS'
-            python = 'Python.Python.3.12'
-        }
-        $installCommands = @(
-            $missing | ForEach-Object { $wingetPackages[$_] } | Select-Object -Unique |
-                ForEach-Object { "  winget install --id $_ -e" }
-        )
-        Fail ("missing prerequisites: $($missing -join ' '). Needed: Git for Windows, Go 1.26+, Node.js 22.12+ (with npm), and Python 3.11+. " +
-            "Install the missing ones, then open a NEW PowerShell window (so PATH is refreshed) and rerun this command:`n" +
-            ($installCommands -join "`n"))
-    }
+    $python = $status.Python
 
     # PowerShell's command search tries <name>.ps1 before the PATHEXT extensions, and Node.js ships
     # npm.ps1 beside npm.cmd, so a bare `npm` would run the .ps1 shim: Windows PowerShell 5.1's
@@ -388,7 +513,7 @@ function Assert-Prerequisite {
         Fail "could not determine the Node.js version ('node -p process.versions.node' exited with code $($nodeProbe.ExitCode))."
     }
     if ($nodeVersion -lt $MinimumNodeVersion) {
-        Fail "Node.js 22.12 or newer is required; found v$nodeVersion."
+        Fail "Node.js 22.12 or newer is required; found v$nodeVersion. Update it with: winget upgrade --id OpenJS.NodeJS.LTS -e"
     }
 
     $goProbe = Get-NativeOutput -Command 'go' -Arguments @('env', 'GOVERSION')
@@ -397,11 +522,11 @@ function Assert-Prerequisite {
         Fail "could not determine the Go version ('go env GOVERSION' exited with code $($goProbe.ExitCode))."
     }
     if ($goVersion -lt $MinimumGoVersion) {
-        Fail "Go 1.26 or newer is required; found $($goProbe.Output)."
+        Fail "Go 1.26 or newer is required; found $($goProbe.Output). Update it with: winget upgrade --id GoLang.Go -e"
     }
 
     if ([string]::IsNullOrWhiteSpace($python.Command)) {
-        Fail "Python 3.11 or newer is required; $($python.Reports -join '; ')."
+        Fail "Python 3.11 or newer is required; $($python.Reports -join '; '). Install it with: winget install --id Python.Python.3.12 -e"
     }
     Write-Host "Using Python $($python.Version) via '$($python.Display)' ($($python.Path))."
 
@@ -437,6 +562,46 @@ function Get-NormalizedDirectoryPath {
     return $trimmed
 }
 
+function Save-SourceSnapshot {
+    <#
+    Fills $Destination from the project's main-branch zip, for a PC without Git (a later run
+    replaces it the same way). Only a missing directory or one carrying our marker is replaced.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Destination)
+    $temporary = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ('csr-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $temporary | Out-Null
+    try {
+        Write-Log 'Downloading source'
+        $archive = Join-Path -Path $temporary -ChildPath 'source.zip'
+        $previousProgress = $ProgressPreference
+        $ProgressPreference = 'SilentlyContinue'
+        try {
+            Invoke-WebRequest -UseBasicParsing -Uri $ArchiveUrl -OutFile $archive
+        } catch {
+            Fail "could not download $ArchiveUrl ($($_.Exception.Message))."
+        } finally {
+            $ProgressPreference = $previousProgress
+        }
+        $expanded = Join-Path -Path $temporary -ChildPath 'expanded'
+        Expand-Archive -LiteralPath $archive -DestinationPath $expanded -Force
+        $roots = @(Get-ChildItem -LiteralPath $expanded -Directory)
+        if ($roots.Count -ne 1 -or -not (Test-Path -LiteralPath (Join-Path -Path $roots[0].FullName -ChildPath $PatcherRelativePath) -PathType Leaf)) {
+            Fail 'the downloaded source archive does not look like this project.'
+        }
+        if (Test-Path -LiteralPath $Destination) {
+            Remove-Item -LiteralPath $Destination -Recurse -Force
+        }
+        $parentDir = Split-Path -Parent $Destination
+        if (-not [string]::IsNullOrWhiteSpace($parentDir)) {
+            New-Item -ItemType Directory -Force -Path $parentDir | Out-Null
+        }
+        Move-Item -LiteralPath $roots[0].FullName -Destination $Destination
+        Set-Content -LiteralPath (Join-Path -Path $Destination -ChildPath $SnapshotMarker) -Value 'Filled from the project archive by install.ps1; replaced on the next run.' -Encoding ASCII
+    } finally {
+        Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Resolve-SourceDir {
     param([Parameter(Mandatory = $true)][string]$RequestedSourceDir)
     $RequestedSourceDir = Get-NormalizedDirectoryPath -Path $RequestedSourceDir
@@ -455,7 +620,11 @@ function Resolve-SourceDir {
         }
     }
 
+    $hasGit = Test-ApplicationCommand -Name 'git'
     if (Test-Path -LiteralPath (Join-Path -Path $RequestedSourceDir -ChildPath '.git')) {
+        if (-not $hasGit) {
+            Fail "$RequestedSourceDir is a Git checkout but Git is not installed. Install it with: winget install --id Git.Git -e (or choose another directory with CODEX_SUBSCRIPTION_ROUTER_SOURCE_DIR)."
+        }
         $status = Get-NativeOutput -Command 'git' -Arguments @('-C', $RequestedSourceDir, 'status', '--porcelain')
         if ($status.ExitCode -ne 0) {
             Fail "git status failed in $RequestedSourceDir (exit code $($status.ExitCode))."
@@ -472,8 +641,12 @@ function Resolve-SourceDir {
         }
         Write-Log 'Updating source'
         Invoke-NativeCommand -Description 'git pull' -Command 'git' -Arguments @('-C', $RequestedSourceDir, 'pull', '--ff-only', 'origin', $SourceBranch)
+    } elseif (Test-Path -LiteralPath (Join-Path -Path $RequestedSourceDir -ChildPath $SnapshotMarker)) {
+        Save-SourceSnapshot -Destination $RequestedSourceDir
     } elseif (Test-Path -LiteralPath $RequestedSourceDir) {
         Fail "$RequestedSourceDir exists but is not a Git repository."
+    } elseif (-not $hasGit) {
+        Save-SourceSnapshot -Destination $RequestedSourceDir
     } else {
         Write-Log 'Downloading source'
         $parentDir = Split-Path -Parent $RequestedSourceDir
@@ -529,6 +702,33 @@ function Stop-InstallationProcess {
     Fail "could not stop processes belonging to $InstallDir."
 }
 
+function Confirm-UntestedSource {
+    <#
+    The Codex app on this PC is a build the project has not recorded. Say what that means in plain
+    words and ask. The patcher still refuses by itself if anything it expects has changed, and the
+    official app is never modified, so continuing risks a router that behaves oddly, not a broken
+    Codex. Returns when the answer is yes; fails otherwise.
+    #>
+    if ($Options.AllowUntestedSource) {
+        return
+    }
+    Write-Host ''
+    Write-Host 'The Codex app on this PC is newer than the versions this project has tested.'
+    Write-Host 'Codex Router can still be built from it: every step checks that the app looks exactly'
+    Write-Host 'as expected and stops by itself if it does not, and your Codex app is never changed.'
+    Write-Host 'The only risk is that something in the router misbehaves on this newer version.'
+    if (-not $Options.AssumeYes) {
+        if (-not (Test-Interactive)) {
+            Fail ("the Codex app is a build the project has not tested, and nobody can be asked here. " +
+                "Set `$env:CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE = '1' (or pass -AllowUntestedSource) to continue anyway.")
+        }
+        $answer = Read-Host 'Build it anyway? [Y/n]'
+        if ($answer -match '^\s*(n|no)\s*$') {
+            Fail 'stopped at your request. Nothing was changed.'
+        }
+    }
+}
+
 # ---------------------------------------------------------------------------------------------
 # Main.
 # ---------------------------------------------------------------------------------------------
@@ -564,16 +764,33 @@ function Main {
         Invoke-NativeCommand -Description 'npm ci' -Command $toolchain.NpmPath -Arguments @('ci', '--ignore-scripts', '--no-audit', '--no-fund')
 
         $patchArguments = @()
+        if ($Options.AllowUntestedSource) {
+            $patchArguments += '--allow-untested-source'
+        }
+        if ($Options.NoDesktopShortcut) {
+            $patchArguments += '--no-desktop-shortcut'
+        }
+
+        # Find out about the app before anything is stopped or built: an app build the project has
+        # not recorded is a question for the person, and answering "no" must leave their running
+        # copy alone.
+        Write-Log 'Checking the Codex app on this PC'
+        $checkArguments = @($toolchain.PythonArguments) + @($PatcherRelativePath, '--check-source') + @($patchArguments)
+        $checkExitCode = Invoke-NativeCommandForExitCode -Description 'the source check' -Command $toolchain.PythonCommand -Arguments $checkArguments
+        if ($checkExitCode -eq $UntestedSourceExitCode) {
+            Confirm-UntestedSource
+            $patchArguments += '--allow-untested-source'
+        } elseif ($checkExitCode -ne 0) {
+            Fail "the source check failed with exit code $checkExitCode; the message above says why."
+        }
+
         if (Test-Path -LiteralPath $DestinationDir -PathType Container) {
             Write-Log 'Stopping the existing installation'
             Stop-InstallationProcess -InstallDir $DestinationDir
             $patchArguments += '--force'
         }
-        if ($Options.AllowUntestedSource) {
-            $patchArguments += '--allow-untested-source'
-        }
 
-        Write-Log 'Building Codex Subscription Router'
+        Write-Log 'Building Codex Router (this takes a few minutes)'
         $patcherArguments = @($toolchain.PythonArguments) + @($PatcherRelativePath) + @($patchArguments)
         $commandLine = Format-CommandLine -Tokens (@($toolchain.PythonCommand) + @($patcherArguments))
         Write-Host "Running: $commandLine"
@@ -599,10 +816,17 @@ function Main {
     if ($Options.NoLaunch) {
         Write-Log 'Skipping launch (NoLaunch requested)'
     } else {
-        Write-Log 'Launching Codex Subscription Router'
+        Write-Log 'Opening Codex Router'
         Start-Process -FilePath $Launcher
     }
     Write-Host ''
+    Write-Host 'Codex Router is installed.'
+    Write-Host '  Open it any time: press the Windows key, type "Codex Router" and press Enter.'
+    if (-not $Options.NoDesktopShortcut) {
+        Write-Host '  There is a Codex Router icon on your Desktop too.'
+    }
+    Write-Host '  Your normal Codex app is untouched and keeps working as before.'
+    Write-Host "  Installed in: $DestinationDir"
     Write-Host "Installed successfully: $DestinationDir"
 }
 

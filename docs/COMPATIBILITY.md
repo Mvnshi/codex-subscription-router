@@ -81,6 +81,14 @@ Launch and lifecycle
 - the official app's `codex://` handler, Chrome native-messaging registration and
   profile were not changed by building or running the copy
 
+A later Store build. While this work was being done the Store updated the package to
+`26.930.6422.0` (`app.asar` `bdff0036791292cb315ff25c2b836ba35addedd2327f25dd471c38df791194dd`).
+The installer reported it as not recorded, asked, and built from it with
+`--allow-untested-source`: every anchor matched, the copy launched with the router's own
+icons and shortcuts, and the control API answered with both accounts connected and the
+routing setting intact. It is not in `TESTED_WINDOWS_SOURCE_BUILDS`: the routing, switching
+and failover checks below were run on `26.930.3930.0`.
+
 Routing, switching and failover, live. A headless client drove the router's real
 multiplexer over stdio, with the desktop app's handshake, against two real
 subscriptions (Pro 5x with its weekly limit reached, Plus fresh), using

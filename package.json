@@ -20,8 +20,8 @@
     "check:go": "go test ./... && go vet ./...",
     "check:js": "node --check ui/account-menu.js && node --check ui/thread-subscription.js && node --check ui/ui-test-bridge.cjs && node --test ui/account-menu.test.cjs",
     "check:win": "node --check scripts/win/exe-info.mjs && node --check scripts/win/set-asar-integrity.mjs && node --check scripts/win/pe.mjs && node --test \"scripts/win/*.test.mjs\"",
-    "check:python": "python3 -m py_compile scripts/patch_app.py scripts/patch_app_windows.py scripts/check_release.py && python3 -m unittest discover -s scripts -p \"test_*.py\"",
-    "check:shell": "bash -n install.sh",
+    "check:python": "python3 -m py_compile scripts/patch_app.py scripts/patch_app_windows.py scripts/check_release.py scripts/make_icons.py && python3 -m unittest discover -s scripts -p \"test_*.py\" && python3 scripts/make_icons.py --check",
+    "check:shell": "bash -n install.sh && bash -n install-mac.command && bash -n scripts/doctor.sh && bash -n scripts/test-install.sh && bash scripts/test-install.sh",
     "release:check": "python3 scripts/check_release.py"
   },
   "devDependencies": {

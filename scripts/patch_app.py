@@ -119,11 +119,29 @@ def parse_args() -> argparse.Namespace:
         help="Continue after an explicit version, build, or ASAR hash mismatch.",
     )
     parser.add_argument(
+        "--check-source",
+        action="store_true",
+        help=(
+            "Only find the official app and check it against the recorded builds, then stop "
+            "without copying, building or signing anything (exit 3: not a recorded build)."
+        ),
+    )
+    parser.add_argument(
         "--allow-signing-team-change",
         action="store_true",
         help="Replace an existing build signed by a different Apple team.",
     )
     return parser.parse_args()
+
+
+# Exit status of --check-source and of a full run when the only problem is that the
+# official build is not one the project has recorded; install.sh turns it into a
+# question for the person. Every other failure is 1.
+UNTESTED_SOURCE_EXIT_CODE = 3
+
+
+class UntestedSourceError(RuntimeError):
+    """The official build is not recorded as tested (nothing else is wrong with it yet)."""
 
 
 def run(
@@ -2574,6 +2592,7 @@ def patch_app(
     allow_adhoc_signing: bool,
     allow_untested_source: bool,
     allow_signing_team_change: bool,
+    check_source_only: bool = False,
 ) -> None:
     source = source.expanduser().resolve()
     destination = destination.expanduser().resolve()
@@ -2603,7 +2622,7 @@ def patch_app(
         f"app.asar {source_asar_hash}"
     )
     if expected_asar_hash != source_asar_hash and not allow_untested_source:
-        raise RuntimeError(
+        raise UntestedSourceError(
             "the source version, build, or app.asar hash is not approved; "
             "review the upstream change or pass --allow-untested-source"
         )
@@ -2613,6 +2632,9 @@ def patch_app(
             "the patch will continue only while every expected anchor matches.",
             file=sys.stderr,
         )
+    if check_source_only:
+        print("Source check passed; nothing was copied, built or signed.")
+        return
 
     for tool in ("codesign", "ditto", "go", "npm", "security", "xcrun"):
         require_tool(tool)
@@ -2804,7 +2826,12 @@ def main() -> int:
             args.allow_adhoc_signing,
             args.allow_untested_source,
             args.allow_signing_team_change,
+            args.check_source,
         )
+    except UntestedSourceError as error:
+        # A question for the person, not a failure, when only checking.
+        print(error if args.check_source else f"patch failed: {error}", file=sys.stderr)
+        return UNTESTED_SOURCE_EXIT_CODE
     except (RuntimeError, OSError, subprocess.CalledProcessError) as error:
         print(f"patch failed: {error}", file=sys.stderr)
         return 1

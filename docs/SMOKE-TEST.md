@@ -95,8 +95,13 @@ Store package's `app` directory under `%ProgramFiles%\WindowsApps` is meant.
   names the official executable, and if
   `HKCU:\Software\Classes\codex-subscription-router\shell\open\command`
   exists it names the copy.
-- Confirm the Start menu shortcut and a taskbar pin open the copy, and that
-  a second launch focuses the running copy instead of starting another.
+- Confirm the **Codex Router** Start menu and Desktop shortcuts (router icon) and a
+  taskbar pin open the copy, that its window and notification-area icons are the
+  router's and not the official app's, and that a second launch focuses the running
+  copy instead of starting another.
+- Run `install.ps1` from a clean PC that lacks Go, Node.js and Python: it should offer to
+  install them with winget, and finish without opening a new window. With the Store app
+  on a build the project has not recorded it should explain that and ask.
 - Quit the copy and confirm no `codex.exe` or `codex.real.exe` from the
   destination remains after a few seconds (Windows shutdown closes each
   child's stdin and kills it after two seconds). Closing the window only hides the

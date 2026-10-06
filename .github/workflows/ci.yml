@@ -58,8 +58,13 @@ jobs:
       - name: Check native launcher syntax
         run: xcrun clang -fsyntax-only -Wall -Wextra native/launcher.c
 
-      - name: Check installer syntax
+      # Runs the installer's own tests (questions, offers, signing check) under macOS's
+      # bash 3.2, which is the shell the one-liner uses.
+      - name: Check installers and their tests
         run: npm run check:shell
+
+      - name: Smoke-test the diagnostics script
+        run: bash scripts/doctor.sh
 
       - name: Check release metadata
         run: npm run release:check
@@ -124,8 +129,30 @@ jobs:
       - name: Check Python syntax
         shell: bash
         run: |
-          python -m py_compile scripts/patch_app.py scripts/patch_app_windows.py scripts/check_release.py
+          python -m py_compile scripts/patch_app.py scripts/patch_app_windows.py scripts/check_release.py scripts/make_icons.py
           python -m unittest discover -s scripts -p "test_*.py"
+
+      - name: Check the router icons are up to date
+        shell: bash
+        run: python scripts/make_icons.py --check
+
+      # The installer is what most people run, in the PowerShell that ships with Windows
+      # (5.1) or in 7; both are tested. The uninstaller runs against a sandbox profile.
+      - name: Test the PowerShell installer (Windows PowerShell 5.1)
+        shell: powershell
+        run: .\scripts\test-install.ps1
+
+      - name: Test the PowerShell installer (PowerShell 7)
+        shell: pwsh
+        run: ./scripts/test-install.ps1
+
+      - name: Test the uninstaller
+        shell: powershell
+        run: .\scripts\test-uninstall.ps1
+
+      - name: Smoke-test the diagnostics script
+        shell: powershell
+        run: .\scripts\doctor.ps1
 
       - name: Check PowerShell installer syntax
         shell: pwsh

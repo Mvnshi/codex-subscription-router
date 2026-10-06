@@ -17,7 +17,8 @@ or, from a clone:  powershell -ExecutionPolicy Bypass -File scripts\doctor.ps1
     function Version-Of([string]$Command, [string[]]$Arguments) {
         $found = Get-Command $Command -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $found) { return 'not found' }
-        try { return ((& $found.Source @Arguments 2>&1 | Select-Object -First 1) -as [string]).Trim() } catch { return 'found, but did not run' }
+        # Collect all the output: stopping a native command's pipeline early leaves a failing exit code behind.
+        try { $lines = @(& $found.Source @Arguments 2>&1); return ([string]$lines[0]).Trim() } catch { return 'found, but did not run' }
     }
 
     'Codex Router doctor'
@@ -117,4 +118,6 @@ or, from a clone:  powershell -ExecutionPolicy Bypass -File scripts\doctor.ps1
     } else {
         '  skipped (needs Python, the project source and the Store app)'
     }
+    # The report is not a test: a check that exited 3 above must not make the whole script look failed.
+    $global:LASTEXITCODE = 0
 }

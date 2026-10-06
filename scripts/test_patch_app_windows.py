@@ -561,25 +561,12 @@ class AsarListingTests(unittest.TestCase):
 
 
 class PreludeTests(unittest.TestCase):
-    def test_windows_prelude_is_exact(self):
-        self.assertEqual(
-            win.windows_desktop_profile_prelude(),
-            'process.env.SKY_CUA_SERVICE_NATIVE_PIPE_PATH="\\\\\\\\.\\\\pipe\\\\codex-subscription-router-computer-use-"'
-            "+globalThis.crypto.randomUUID();"
-            "process.env.CODEX_ELECTRON_SKIP_COMPUTER_USE_CANONICAL_REFRESH=`1`;",
-        )
-
-    def test_prelude_is_a_javascript_string_for_the_pipe(self):
-        # The prefix is a JSON (hence JavaScript) string literal and the
-        # per-launch suffix is appended at run time, so no other local account
-        # can pre-create the pipe under a name known in advance.
-        prelude = win.windows_desktop_profile_prelude()
-        expression = prelude.split("=", 1)[1].split(";", 1)[0]
-        literal, plus, suffix = expression.partition("+")
-        self.assertEqual(plus, "+")
-        self.assertEqual(json.loads(literal), r"\\.\pipe\codex-subscription-router-computer-use-")
-        self.assertEqual(json.loads(literal), win.COMPUTER_USE_PIPE_PREFIX)
-        self.assertEqual(suffix, "globalThis.crypto.randomUUID()")
+    def test_windows_prelude_sets_nothing(self):
+        # SKY_CUA_SERVICE_NATIVE_PIPE_PATH and the canonical-refresh skip are only
+        # read on darwin in the Store build, and the Windows Computer Use client
+        # has no pipe or service to share, so nothing is inserted.
+        self.assertEqual(win.windows_desktop_profile_prelude(), "")
+        self.assertFalse(hasattr(win, "COMPUTER_USE_PIPE_PREFIX"))
 
     def test_prelude_composes_with_isolate_desktop_profile(self):
         extracted = Path(tempfile.mkdtemp()) / "asar"
@@ -600,10 +587,22 @@ class PreludeTests(unittest.TestCase):
         patch_app.isolate_desktop_profile(extracted, win.windows_desktop_profile_prelude())
         self.assertEqual(
             (build / "bootstrap-a.js").read_text(encoding="utf-8"),
-            win.windows_desktop_profile_prelude()
-            + "Xe.app.setPath(`userData`,Xe.app.getPath(`appData`)+`/Codex Subscription Router`);"
+            "Xe.app.setPath(`userData`,Xe.app.getPath(`appData`)+`/Codex Subscription Router`);"
             "let{runMainAppStartup:Rm}=1;",
         )
+
+
+class GoArchitectureTests(unittest.TestCase):
+    def test_host_machine_types_map_to_go_architectures(self):
+        self.assertEqual(win.go_architecture("x64"), "amd64")
+        self.assertEqual(win.go_architecture("arm64"), "arm64")
+
+    def test_anything_else_is_refused_by_name(self):
+        for machine in ("x86", "0x1c4", "unknown", None):
+            with self.subTest(machine=machine), self.assertRaises(RuntimeError) as caught:
+                win.go_architecture(machine)
+            self.assertIn(repr(machine), str(caught.exception))
+            self.assertIn("arm64 and x64", str(caught.exception))
 
 
 EXE_INFO = {
@@ -1502,6 +1501,7 @@ class FakeTools:
         self.run_commands: list = []
         self.subprocess_runs: list = []
         self.builds: list = []
+        self.machine = "x64"
         self.packed_bundles: dict = {}
         self.unpack = None
         self.unpack_dir = None
@@ -1558,7 +1558,8 @@ class FakeTools:
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
         if command[1].endswith("exe-info.mjs"):
             self.events.append(("exe-info", Path(command[2])))
-            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(EXE_INFO), stderr="")
+            info = dict(EXE_INFO, machine=self.machine)
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(info), stderr="")
         if command[1].endswith("set-asar-integrity.mjs"):
             entry = {"file": command[3], "alg": "SHA256", "value": command[4]}
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps([entry]), stderr="")
@@ -1610,9 +1611,11 @@ class PatchAppOrchestrationTests(unittest.TestCase):
         }
 
     def run_patch(
-        self, *, force=False, create_shortcut=True, source=None, codex_executable=None, store_candidates=()
+        self, *, force=False, create_shortcut=True, source=None, codex_executable=None, store_candidates=(),
+        machine="x64",
     ):
         tools = FakeTools()
+        tools.machine = machine
         before = snapshot(self.source)
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.dict(os.environ, self.environment), \
@@ -1640,7 +1643,7 @@ class PatchAppOrchestrationTests(unittest.TestCase):
         tools.stdout, tools.stderr = out.getvalue(), err.getvalue()
         return tools
 
-    def assert_installed(self, tools):
+    def assert_installed(self, tools, goarch="amd64"):
         destination = self.destination
         self.assertTrue(destination.is_dir())
         self.assertEqual((destination / "Codex Subscription Router.exe").read_bytes(), b"MZ built ./cmd/codex-router-launcher")
@@ -1666,8 +1669,10 @@ class PatchAppOrchestrationTests(unittest.TestCase):
             win.icacls_commands(self.state_root, "PC\\me"),
         )
         # Builds: the mux into the temporary directory, the launcher into the stage.
-        (mux_path, mux_package, mux_goos, _, _), (launcher_path, launcher_package, launcher_goos, _, launcher_ldflags) = tools.builds
+        (mux_path, mux_package, mux_goos, mux_goarch, _), (launcher_path, launcher_package, launcher_goos, launcher_goarch, launcher_ldflags) = tools.builds
         self.assertEqual((mux_package, mux_goos), ("./cmd/codex-mux", "windows"))
+        # Built for the architecture of the official host, not of the toolchain.
+        self.assertEqual((mux_goarch, launcher_goarch), (goarch, goarch))
         self.assertEqual(mux_path.name, "codex.exe")
         self.assertTrue(mux_path.parent.name.startswith(win.STAGING_PREFIX))
         self.assertEqual((launcher_package, launcher_goos), ("./cmd/codex-router-launcher", "windows"))
@@ -1775,6 +1780,19 @@ class PatchAppOrchestrationTests(unittest.TestCase):
         self.assertFalse(self.destination.exists())
         self.assertFalse(self.state_root.exists())
         self.assertEqual(sorted(entry.name for entry in self.local.joinpath("Programs").iterdir()), ["ChatGPT"])
+
+    def test_arm64_host_builds_both_programs_for_arm64(self):
+        tools = self.run_patch(machine="arm64")
+        self.assert_installed(tools, goarch="arm64")
+        self.assertEqual([build[3] for build in tools.builds], ["arm64", "arm64"])
+        self.assertIn("arm64", tools.stdout)
+
+    def test_unsupported_host_architecture_stops_before_any_build_or_copy(self):
+        with self.assertRaises(RuntimeError) as caught:
+            self.run_patch(machine="x86")
+        self.assertIn("'x86'", str(caught.exception))
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(self.state_root.exists())
 
     def test_explicit_source_and_codex_override(self):
         other = make_app(self.root / "elsewhere" / "ChatGPT", "ChatGPT.exe", unpacked={"@openai": {}, "node-pty": {}})

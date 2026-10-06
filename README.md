@@ -21,8 +21,10 @@ keyboard input and real reset redemption through the account API also passed. Se
 [the 12246 port notes](docs/BUILD-12246-PORT.md). The Windows port supports the
 Microsoft Store build `26.930.3930.0` (app build `12947`), provisionally: it
 patches, launches beside the official app, and routes, switches and moves chats
-between two real subscriptions (checked live); reset redemption, plugin scoping,
-Computer Use and ARM64 are not yet exercised. See
+between two real subscriptions, and its usage sheet with per-account resets and
+per-account plugin connections work (checked live). Computer Use is off by default
+in OpenAI's Windows build and the router leaves that alone; ARM64 is built and
+tested in CI but not yet run on ARM64 hardware. See
 [the Windows port notes](docs/WINDOWS.md).
 
 ![Multi-subscription account menu](screenshots/account-menu.png)
@@ -100,7 +102,7 @@ Codex Subscription Router currently targets:
 | Component | Supported value |
 | --- | --- |
 | Platform: macOS | Apple silicon, tested against the builds below |
-| Platform: Windows | x64, **provisional**: tested against the Microsoft Store build below; every anchor is checked at run time and any other build needs `--allow-untested-source`. arm64 is untested |
+| Platform: Windows | x64, **provisional**: tested against the Microsoft Store build below; every anchor is checked at run time and any other build needs `--allow-untested-source`. ARM64 builds natively and is tested in CI, but the app has not run on ARM64 hardware |
 | Official ChatGPT versions (macOS) | `26.803.61601` (build `6396`), `26.810.52044` (build `6662`), `26.901.22334` (build `7746`), `26.901.51231` (build `8109`), `26.928.20755` (build `12246`, provisional) |
 | Official ChatGPT versions (Windows) | `OpenAI.Codex` `26.930.3930.0` from the Microsoft Store (app `26.930.31730`, build `12947`, provisional) |
 | Go | 1.26 or newer |
@@ -129,7 +131,7 @@ Use permissions. Ad-hoc signing is intended only for diagnostics.
 
 ### Windows
 
-- 64-bit Windows (x64 tested; ARM64 untested)
+- 64-bit Windows (x64 tested; ARM64 builds natively but is not yet run on hardware)
 - The official ChatGPT/Codex desktop app installed from the **Microsoft Store**
   (the package `OpenAI.Codex`; OpenAI ships the Windows app only this way). The
   patcher finds it through the package registry, reads its files and copies them
@@ -220,8 +222,9 @@ Appshots and Computer Use may not function with an ad-hoc signature.
 > The Windows port is provisional. It is verified on the Microsoft Store build
 > `26.930.3930.0` (patches, launches next to the official app, runs the
 > multiplexer, connects accounts, and routes, switches and moves chats between
-> two real subscriptions); reset redemption, plugin scoping, Computer Use and
-> ARM64 are not yet exercised. A different Store build is refused until
+> two real subscriptions, with the usage sheet's per-account resets and the
+> per-account plugin connections working); a real reset redemption, Computer Use
+> and the app on ARM64 hardware are not yet exercised. A different Store build is refused until
 > `--allow-untested-source` is passed, and every layout assumption is checked at
 > run time instead of assumed. Read [the Windows port notes](docs/WINDOWS.md)
 > first.
@@ -537,12 +540,15 @@ latest completed run is recorded in
 - Generated macOS app bundles are tied to one macOS user and signing team.
 - The Windows port is provisional: verified on one Store build to patch,
   launch, connect accounts, and route, switch and move chats between two real
-  subscriptions, but reset redemption, plugin scoping and ARM64 have not been
-  exercised, and the reactive failover (a turn the engine itself reports as over
-  its limit) is covered only by automated tests. The Windows copy is unsigned, has no package identity
-  (so no Store-managed sandbox service, `codex://` handler or Explorer menu).
-  Computer Use on Windows is untested: the package ships a helper and the copy
-  starts it, but the patcher does not re-identify it as it does on macOS.
+  subscriptions, with per-account resets and plugin connections working in the
+  live window. A real reset redemption and the app on ARM64 hardware have not
+  been exercised, and the reactive failover (a turn the engine itself reports as
+  over its limit) is covered only by automated tests. The Windows copy is
+  unsigned, has no package identity (so no Store-managed sandbox service,
+  `codex://` handler or Explorer menu). Computer Use is off by default in
+  OpenAI's Windows build (it needs `CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE=1`
+  in the environment); the copy follows that and changes nothing, and its helper
+  starts from the copy and lists windows, but a model-driven turn was not run.
 - Releases are source-only; patched OpenAI binaries are never distributed.
 
 ## Contributing and releases

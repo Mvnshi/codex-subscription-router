@@ -11,6 +11,25 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ### Windows
 
+- Plugin requests scoped to an account that was removed or paused now fail with an
+  error instead of being answered by Primary, which could show or start an OAuth
+  login for the wrong account. Covered by new end-to-end tests that send scoped
+  `mcpServerStatus/list`, `app/list` and `mcpServer/oauth/login` requests through
+  the real multiplexer to two engines.
+- Build the multiplexer and launcher for the architecture of the official host
+  executable (x64 or ARM64, anything else stops the install) instead of the
+  toolchain's default, and add a `windows-arm64` CI job that runs the Go tests on a
+  real ARM64 Windows runner and checks both programs are ARM64. The macOS job now
+  cross-compiles for arm64 as well.
+- Stop setting the two Computer Use environment variables on Windows. The Store
+  build reads them only on macOS and talks to its Computer Use helper over stdio,
+  so they did nothing while implying a pinned pipe. Computer Use is off in OpenAI's
+  Windows build unless `CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE=1` is set; the
+  copy inherits the environment unchanged.
+- Verify the usage sheet's per-account reset flow and the Plugins page's account
+  picker in the live Windows window (simulated reset balances, so no real credit
+  was spent), and fix the UI-test bridge's account-row matcher for plan names that
+  end in a letter.
 - Add an opt-in engine provider override for the router: `CODEX_MUX_ENGINE_PROVIDER`
   or `<state root>/engine-provider` starts the router's engines with
   `-c model_provider=<id>`, so a Codex config that routes through a gateway which

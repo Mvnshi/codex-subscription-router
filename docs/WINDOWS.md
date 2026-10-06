@@ -3,10 +3,13 @@
 Status in one line: provisional. Verified on one real build, the Microsoft
 Store package `OpenAI.Codex` `26.930.3930.0` (app build `12947`): it patches,
 launches beside the official app, runs the multiplexer, connects accounts, and
-routes, switches and moves chats between two real subscriptions. Reset
-redemption, plugin scoping and ARM64 have not been exercised, and the first
-version of this port (written without a Windows build to test against) was wrong
-about the one thing that matters most; see
+routes, switches and moves chats between two real subscriptions; its usage
+sheet with per-account resets and its per-account plugin connections work too
+(checked live, see [COMPATIBILITY.md](COMPATIBILITY.md)). Computer Use is off in
+OpenAI's Windows build unless the environment turns it on, and the router leaves
+that alone. ARM64 builds natively and is tested in CI, but the app has not run on
+ARM64 hardware. The first version of this port (written without a Windows build
+to test against) was wrong about the one thing that matters most; see
 [Observed on the Store build](#observed-on-the-store-build).
 
 Every other statement below about the official Windows app is still a run-time
@@ -264,7 +267,7 @@ multiplexer with a message naming its source.
 | Bundled Codex | `Contents/Resources/codex` → mux, original kept as `codex.real` | the single `codex.exe` found under the copy (preferring the one under `resources` when a same-named stub sits beside the host) → mux, original renamed `codex.real.exe` in the same directory; the mux looks for `codex.real.exe`, then `codex.real`. When `codex.exe` lives inside `app.asar.unpacked`, the repacked archive header keeps the official binary's recorded size and SHA-256 for that path and lists no `codex.real.exe`; harmless because Electron reads unpacked entries from disk without checking them, but the header is not a description of the installed binary |
 | Asar integrity | `ElectronAsarIntegrity` in `Info.plist` | `INTEGRITY`/`ELECTRONASAR` resource in the Electron executable (what Electron's `archive_win.cc` reads), rewritten with `scripts/win/set-asar-integrity.mjs` (resedit, `ignoreCert: true`); rewriting drops the Authenticode signature |
 | Signing | `codesign` under one Apple team, team continuity enforced | none; the copy runs unsigned and SmartScreen may warn |
-| Computer Use | helper re-identified, re-signed, managed service pinned | not patched; `SKY_CUA_SERVICE_NATIVE_PIPE_PATH` set to the prefix `\\.\pipe\codex-subscription-router-computer-use-` plus a `globalThis.crypto.randomUUID()` drawn on every launch (the Windows pipe namespace is machine-global, so a fixed name could be pre-created by any other local account and answered as a fake helper; the macOS socket gets that protection from the `0700` state root), and `CODEX_ELECTRON_SKIP_COMPUTER_USE_CANONICAL_REFRESH=1` |
+| Computer Use | helper re-identified, re-signed, managed service pinned | not patched, and nothing is set for it: the Windows client of `@oai/sky` starts its helper as a child process over stdio, so there is no service or socket to pin, and the two macOS-only variables the macOS prelude sets (`SKY_CUA_SERVICE_NATIVE_PIPE_PATH`, `CODEX_ELECTRON_SKIP_COMPUTER_USE_CANONICAL_REFRESH`) are only read on `darwin` in the Store build. The feature is off unless `CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE=1` is set in the environment, which the copy inherits unchanged |
 | Desktop profile | `~/Library/Application Support/Codex Subscription Router` | `%APPDATA%\Codex Subscription Router` |
 | State permissions | `0700` root, `0600` files | `icacls` at install time: explicit ACEs on the root reset first, then inheritance removed, current user and SYSTEM only, inherited by files and directories created under the root later (a previous install renamed into `backups\` keeps its own ACL); the mux's POSIX modes are no-ops beyond the read-only bit |
 | URL scheme | `CFBundleURLSchemes` edited in `Info.plist` | the literal `'codex'` in `setAsDefaultProtocolClient`, `removeAsDefaultProtocolClient`, and `isDefaultProtocolClient` calls in `.vite/build/*.js` becomes `'codex-subscription-router'`; a `setAsDefaultProtocolClient` call whose scheme is not the literal `'codex'` (a variable, another literal, `.call`/`.apply`, an alias) stops the patch before the bundle is written, because the copy would register that scheme for itself under `HKCU\Software\Classes`; only the total absence of any such call is a warning. The one exception is a call inside the exact win32-guarded early-return shape the Store build uses, which never runs on Windows (see [Observed on the Store build](#observed-on-the-store-build)) |
@@ -436,11 +439,23 @@ Official app layout:
   `chrome.dll`, `ChatGPT.exe` or `chrome_elf.dll`.
 - **Observed.** The host's `RT_VERSION` carries `ProductVersion`, `FileVersion`
   and `ProductName` (`Codex`); the versions are Chromium's, not the app's.
-- The Windows build honours `SKY_CUA_SERVICE_NATIVE_PIPE_PATH` and
-  `CODEX_ELECTRON_SKIP_COMPUTER_USE_CANONICAL_REFRESH`; if it ignores them the
-  prelude is harmless. Unverified. The package ships a Windows Computer Use helper
-  (`resources\cua_node\...\codex-computer-use-swift.exe`) and the copy starts one;
-  whether Computer Use works in the copy has not been tested.
+- **Observed.** The Windows build does not use `SKY_CUA_SERVICE_NATIVE_PIPE_PATH`
+  or `CODEX_ELECTRON_SKIP_COMPUTER_USE_CANONICAL_REFRESH`: the main bundle reads
+  them only when the platform is `darwin`, and the Windows target of `@oai/sky`
+  (`resources\cua_node\bin\node_modules\@oai\sky`) spawns `codex-computer-use.exe`
+  as a child over stdio. The first version of the Windows prelude set both anyway,
+  on the assumption that a named pipe was involved; it was inert and is gone. The
+  same bundle enables Windows Computer Use only when
+  `CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE` is `1`, though Settings has a
+  "Computer use" page either way. The copy follows whatever the official app does.
+- **Observed.** The helper works from the copy: with `CODEX_CLI_PATH` set to the
+  router's multiplexer (what the app hands it in the copy) the bundled node runtime
+  started it, and `sky.list_windows()` returned the open windows. The helper starts
+  `codex app-server` itself, so it runs a second multiplexer with its own engines
+  beside the app's; the second one finds port 48123 taken, says "account UI
+  unavailable" and carries on. A model-driven Computer Use turn was not run: the
+  helper reports every open window's title to the model, which the user did not
+  ask for.
 - **Observed.** The official bundled `codex.exe` and the multiplexer are both
   console-subsystem PEs (subsystem 3), so spawning the mux is like spawning the
   official engine. Whether a console window ever flashes was not observed.
@@ -495,9 +510,13 @@ app's code (`role: quit`); clicking it was not exercised.
   drive, a relocated profile) it falls back to a copying move, which is not
   atomic. The staged copy's final rename never crosses volumes because the
   staging directory is created beside the destination.
-- `GOARCH` is the host toolchain's default, not derived from the executable's
-  machine type. An arm64 Windows host running an x64 official app gets an
-  arm64 mux and launcher, which should run but is unexercised.
+- `GOARCH` comes from the machine type of the official host executable
+  (`x64` builds amd64, `arm64` builds arm64, anything else stops the install), not
+  from the toolchain's default, so an emulated x64 Go on an ARM64 PC still builds
+  for the app it sits next to. CI cross-compiles both and, on a real
+  `windows-11-arm` runner, runs the Go tests and checks that both programs come out
+  as ARM64 PE files. The patched app itself has not run on ARM64 hardware: the
+  Store package cannot be installed on a runner.
 - SmartScreen and Defender behaviour towards the unsigned rewritten executable
   and the unsigned Go binaries is untested.
 - Taskbar grouping: pins point at `Codex Subscription Router.exe` while the
@@ -596,7 +615,7 @@ Work on a copy; never edit the official installation.
 - Go: `go test ./...` covers the launcher's argument construction (default
   and `-X` override, passthrough order, error cases) and the real-executable
   lookup on Windows and macOS; `GOOS=windows GOARCH=amd64 go build ./...` and
-  the arm64 equivalent must succeed.
+  the arm64 equivalent must succeed (the `macos` job cross-compiles both).
 - Node: `node --test "scripts/win/*.test.mjs"` cross-compiles a real PE32+
   fixture with Go, adds packager-style `INTEGRITY` and `RT_VERSION` resources
   with resedit directly, and drives both CLIs through `spawnSync`, asserting
@@ -614,9 +633,11 @@ Work on a copy; never edit the official installation.
   functions without installing. On a non-Windows host `Assert-Prerequisite`
   then fails at its Windows-host check, so only the helpers that do not need
   Windows (version parsing, path normalisation) can be exercised there.
-- CI: the `macos` job adds the Windows cross-compile and the PE helper tests;
-  the `windows` job repeats the Go, JavaScript, PE helper, Python, and release
-  checks on `windows-latest` and parses `install.ps1`.
+- CI: the `macos` job adds the Windows cross-compile (amd64 and arm64) and the
+  PE helper tests; the `windows` job repeats the Go, JavaScript, PE helper, Python,
+  and release checks on `windows-latest` and parses `install.ps1`; the
+  `windows-arm64` job runs the Go tests and the PE helper tests on a real ARM64
+  Windows runner and checks the programs the patcher builds are ARM64.
 
 ## Status
 
@@ -630,6 +651,10 @@ JavaScript, PE-helper and Python checks pass on Windows (`go test ./...`,
 also lists what has and has not been exercised: routing, moves and failover
 between two real subscriptions, the one-line installer with a forced rebuild,
 shutdown and single-instance behaviour, and the automated end-to-end failover
-tests have passed; reset redemption, plugin account scoping, Computer Use, ARM64
-and the reactive failover against the real engine have not. Do not drop the
-provisional label before [SMOKE-TEST.md](SMOKE-TEST.md) is complete.
+tests have passed, and so have the usage sheet's per-account reset flow
+(with simulated balances) and the per-account plugin connections in the live
+window. Not exercised: a real reset redemption (it spends a credit, and the code
+is the same HTTP call the macOS build ran against the real API), a model-driven
+Computer Use turn, the app on ARM64 hardware, and the reactive failover against
+the real engine. Do not drop the provisional label before
+[SMOKE-TEST.md](SMOKE-TEST.md) is complete.

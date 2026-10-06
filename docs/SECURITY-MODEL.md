@@ -107,16 +107,21 @@ build.
 - **Same-user processes are not isolated** from each other, as on macOS. The
   copy is installed per user under `%LOCALAPPDATA%\Programs`, so any process
   running as that user can modify it; the installer refuses to run elevated.
-- **Computer Use.** No Windows helper is patched or shipped. The copy's
-  `SKY_CUA_SERVICE_NATIVE_PIPE_PATH` is set to the prefix
-  `\\.\pipe\codex-subscription-router-computer-use-` plus a
-  `globalThis.crypto.randomUUID()` drawn on every launch, so the copy cannot
-  attach to the official helper's pipe by accident and nothing listens at the
-  name it uses. The name is not fixed because the Windows pipe namespace is
-  machine-global with no per-user scope: a fixed name could be pre-created by
-  any other local account and answered as a fake helper, whereas the macOS
-  socket gets that protection from the `0700` state root. Every child the
-  copy spawns inherits the per-launch value through the environment.
+- **Computer Use.** No Windows helper is patched or shipped, and no pipe or
+  service is involved: the app's node runtime starts the official helper as a
+  child process and talks to it over stdio, so there is no machine-global
+  endpoint for another local account to pre-create. (An earlier version of the
+  port set a per-launch pipe name for it; the Store build never reads that
+  variable on Windows, so it was removed rather than left implying a protection.)
+  Windows Computer Use is off unless `CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE=1`
+  is in the environment, and the copy inherits that environment unchanged. The
+  helper starts `codex app-server` from `CODEX_CLI_PATH`, which in the copy is
+  the multiplexer, so it runs a second multiplexer with its own engines; the
+  second one cannot bind the control port and carries on without the account UI.
+- **Plugin requests are per account, and fail closed.** A request that names an
+  account (the Plugins page's connection list, status and OAuth login) is
+  answered by that account's engine only. If the account was removed or paused
+  the request fails with an error; it is never answered by Primary.
 - **Protocol handler.** The copy registers `codex-subscription-router://`
   instead of `codex://` (registry keys under `HKCU\Software\Classes`), so
   deep links keep opening the official app. The patcher fails closed on a

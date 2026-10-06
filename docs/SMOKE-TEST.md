@@ -117,9 +117,21 @@ Store package's `app` directory under `%ProgramFiles%\WindowsApps` is meant.
   `%USERPROFILE%\.codex-mux\backups\<timestamp>\` and that accounts and
   thread ownership survived.
 
-There is no Computer Use section on Windows yet: the package ships a helper
-(`resources\cua_node\...\codex-computer-use-swift.exe`) and the copy starts it,
-but the patcher does not re-identify it and nothing has tested it in the copy.
+There is no Computer Use section on Windows: the feature is off in OpenAI's
+build unless `CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE=1` is set, the helper is
+a child of the app's node runtime (nothing to re-identify), and the router does
+not change either. To check the helper from the copy without a model turn, run
+the bundled `resources\cua_node\bin\node.exe` with `CODEX_CLI_PATH` pointing at
+`resources\codex.exe` and call `sky.list_windows()` from `@oai/sky`, printing
+counts only.
+
+The reset flow and the plugin picker can be exercised without spending a credit:
+start the copy with `CODEX_MUX_UI_TESTS=1` and `--remote-debugging-port`, give
+every account a simulated balance with `POST /v1/test/rate-limit-resets`, then
+drive the Usage sheet and Settings, then Plugins, through the bridge on port
+48124. Turn both off afterwards by restarting the copy normally. The "Use reset"
+step ends in a native confirmation dialog that blocks the page until it is
+answered, so a script has to answer it too.
 
 Record the tested commit, Windows build number (`winver` or
 `[Environment]::OSVersion.Version`), architecture, official `ProductVersion`,

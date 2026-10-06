@@ -38,7 +38,9 @@ jobs:
         run: go vet ./...
 
       - name: Cross-compile Go packages for Windows
-        run: GOOS=windows GOARCH=amd64 go build ./...
+        run: |
+          GOOS=windows GOARCH=amd64 go build ./...
+          GOOS=windows GOARCH=arm64 go build ./...
 
       # The Windows PE helper tests import the pinned resedit package.
       - name: Install locked build tools
@@ -141,3 +143,68 @@ jobs:
       - name: Check release metadata
         shell: bash
         run: python scripts/check_release.py
+
+  # The Windows port is built for the architecture of the official host
+  # executable, so a Windows on ARM PC gets native programs. This job runs the Go
+  # tests (real child processes, file renames, ACLs) on real ARM64 Windows and
+  # checks that both programs the patcher builds come out as ARM64 PE files. It
+  # cannot run the patcher itself: the Store package is not installed here.
+  windows-arm64:
+    runs-on: windows-11-arm
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.12"
+          package-manager-cache: false
+
+      - name: Show toolchain and machine
+        shell: bash
+        run: |
+          go version
+          go env GOOS GOARCH
+          node --version
+          node -p "process.arch"
+          echo "PROCESSOR_ARCHITECTURE=${PROCESSOR_ARCHITECTURE}"
+
+      - name: Test Go packages
+        shell: bash
+        run: go test ./...
+
+      - name: Vet Go packages
+        shell: bash
+        run: go vet ./...
+
+      - name: Install locked build tools
+        shell: bash
+        run: npm ci --ignore-scripts
+
+      # The same flags the patcher passes (scripts/patch_app_windows.py).
+      - name: Build the multiplexer and launcher for ARM64 and check them
+        shell: bash
+        run: |
+          out="${RUNNER_TEMP}/arm64"
+          mkdir -p "${out}"
+          GOOS=windows GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o "${out}/codex.exe" ./cmd/codex-mux
+          GOOS=windows GOARCH=arm64 go build -trimpath -ldflags="-s -w -H=windowsgui -X main.electronExecutable=ChatGPT.exe" -o "${out}/launcher.exe" ./cmd/codex-router-launcher
+          for exe in codex launcher; do
+            machine="$(node scripts/win/exe-info.mjs "${out}/${exe}.exe" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).machine")"
+            echo "${exe}.exe: ${machine}"
+            test "${machine}" = "arm64"
+          done
+
+      - name: Check Windows PE helpers
+        shell: bash
+        run: npm run check:win

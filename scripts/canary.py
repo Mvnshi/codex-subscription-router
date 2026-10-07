@@ -27,6 +27,9 @@ HASH = r"[0-9a-f]{64}"
 # "Source Codex version: 154.0.8037.98 (file 154.0.8037.98), x64, signed, app.asar <hash>" (Windows).
 IDENTITY = re.compile(r"Source (?P<name>.+?) version: (?P<version>\S+) \((?:file )?(?P<second>[^)]+)\).*?app\.asar (?P<asar>" + HASH + ")")
 FAILURE = re.compile(r"^(?:patch failed|Install failed): (?P<message>.+)$")
+# The installers end with a wrapper such as "the Windows patcher failed with exit code 1." that only points
+# back at the real message printed earlier; it must not hide it.
+GENERIC_FAILURE = re.compile(r"^the .{1,40} failed(?: with exit code \d+)?[.;]?(?: .*)?$")
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
@@ -45,13 +48,21 @@ def extract_identity(log: str) -> dict:
 
 
 def extract_failure(log: str) -> str:
-    """The last "patch failed" / "Install failed" message in the log, or ""."""
-    message = ""
+    """The last specific "patch failed" / "Install failed" message in the log, or "".
+
+    A trailing wrapper ("the Windows patcher failed with exit code 1.") is only reported when nothing more
+    specific was printed.
+    """
+    specific = generic = ""
     for line in clean(log).splitlines():
         found = FAILURE.match(line.strip())
         if found:
             message = found["message"].strip()
-    return message
+            if GENERIC_FAILURE.match(message):
+                generic = message
+            else:
+                specific = message
+    return specific or generic
 
 
 def build_result(

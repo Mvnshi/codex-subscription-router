@@ -46,9 +46,28 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual(canary.extract_identity("nothing here"), {})
 
     def test_the_last_failure_message_is_the_one_reported(self):
-        self.assertEqual(canary.extract_failure(MAC_FAIL), "the Windows patcher failed.")
         self.assertEqual(canary.extract_failure("patch failed: first\npatch failed: second\n"), "second")
         self.assertEqual(canary.extract_failure(WINDOWS_PASS), "")
+
+
+    def test_a_wrapper_line_does_not_hide_the_real_error(self):
+        # Real shape: the patcher prints the cause, then the installer ends with a generic line.
+        self.assertEqual(
+            canary.extract_failure(MAC_FAIL),
+            "expected 17 Computer Use references in app.asar, found 16",
+        )
+        windows = "patch failed: could not find the native thread summary section list (found 0 matches)\n" \
+            "Install failed: the Windows patcher failed with exit code 1.\n"
+        self.assertEqual(
+            canary.extract_failure(windows),
+            "could not find the native thread summary section list (found 0 matches)",
+        )
+
+    def test_a_wrapper_line_alone_is_still_reported(self):
+        self.assertEqual(
+            canary.extract_failure("Install failed: the source check failed with exit code 3; the message above says why.\n"),
+            "the source check failed with exit code 3; the message above says why.",
+        )
 
 
 class ResultTests(unittest.TestCase):
@@ -73,7 +92,7 @@ class ResultTests(unittest.TestCase):
         self.assertEqual(result["status"], "fail")
         self.assertEqual(result["app_version"], "26.930.61225")
         self.assertEqual(result["build"], "13232")
-        self.assertEqual(result["message"], "the Windows patcher failed.")
+        self.assertEqual(result["message"], "expected 17 Computer Use references in app.asar, found 16")
 
     def test_patched_but_did_not_boot(self):
         result = canary.build_result(
@@ -111,7 +130,7 @@ class OutputTests(unittest.TestCase):
             canary.build_result(platform="macos", log=MAC_FAIL, exit_code=1),
         ]
         text = canary.summary(results)
-        self.assertIn("| macos | `26.930.61225 (13232)` | FAIL | the Windows patcher failed. |", text)
+        self.assertIn("| macos | `26.930.61225 (13232)` | FAIL | expected 17 Computer Use references in app.asar, found 16 |", text)
         self.assertIn("| windows-x64 | `26.930.7945.0` | pass | boot: ok |", text)
 
     def test_cli_writes_a_result_file(self):

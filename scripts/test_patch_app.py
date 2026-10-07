@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 import os
+import re
 from pathlib import Path, PurePosixPath
 from unittest import mock
 
@@ -553,6 +554,49 @@ class SourceCheckTests(unittest.TestCase):
         argv = ["patch_app.py", "--check-source", "--source", str(self.source / "missing"), "--destination", str(self.destination)]
         with mock.patch.object(patch_app.sys, "argv", argv), mock.patch.object(patch_app.sys, "stderr"),              contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(patch_app.main(), 1)
+
+
+class NewerRendererAnchorTests(unittest.TestCase):
+    """The two anchors that changed in the 26.1002 release line, on text copied from real bundles."""
+
+    OLD_MENU = "function Gi(e){let t=(0,Zi.c)(275),{sidebarFooter:r,ambientUsage:i,open:o,onClose:s}=e,p=We(rt),m=Ae(n),"
+    NEW_MENU = (
+        "function Gi(e){let t=(0,Zi.c)(275),{sidebarFooter:r,ambientUsage:i,hideUsage:a,open:o,onClose:s}=e,"
+        "u=a!==void 0&&a,p=We(rt),m=Ae(n),"
+    )
+    HEADING = (
+        "let Me;{c}[41]===Symbol.for(`react.memo_cache_sentinel`)?(Me=(0,$.jsx)(_,{{children:(0,$.jsx)(g,{{title:"
+        "(0,$.jsx)(S,{{asChild:!0,children:(0,$.jsx)(`h2`,{{className:`m-0`,children:(0,$.jsx)(d,{{id:`codex."
+        "rateLimitResetPromptModal.usageTrackingHeading`,defaultMessage:`Usage`,description:`Heading for the Codex "
+        "usage limit modal`}})}})}})}})}}),{c}[41]=Me):Me={c}[41];"
+    )
+
+    def test_the_profile_menu_header_matches_the_old_and_the_new_shape_and_reads_the_same_names(self):
+        for text in (self.OLD_MENU, self.NEW_MENU):
+            match = re.search(patch_app.PROFILE_MENU_HEADER_PATTERN, text)
+            self.assertIsNotNone(match, text)
+            self.assertEqual(match.group(2, 3, 4), ("p", "We", "rt"))
+
+    def test_the_profile_menu_header_still_refuses_other_shapes(self):
+        # A different prop set, or an unrelated default in between, is not this component.
+        for text in (
+            self.OLD_MENU.replace("ambientUsage:i,", ""),
+            self.NEW_MENU.replace("hideUsage:a,", "somethingElse:a,"),
+            self.NEW_MENU.replace("open:o,onClose:s", "onClose:s,open:o"),
+        ):
+            self.assertIsNone(re.search(patch_app.PROFILE_MENU_HEADER_PATTERN, text), text)
+
+    def test_the_usage_sheet_header_reads_the_cache_name_whatever_it_is(self):
+        for cache in ("t", "n"):
+            match = re.search(patch_app.USAGE_SHEET_HEADER_PATTERN, self.HEADING.format(c=cache))
+            self.assertIsNotNone(match, cache)
+            self.assertEqual((match["var"], match["cache"], match["index"], match["jsx"], match["component"]), ("Me", cache, "41", "$", "_"))
+            self.assertTrue(match["children"].startswith("(0,$.jsx)(g,{title:"))
+            self.assertTrue(match["children"].endswith("})})})})"))
+
+    def test_the_usage_sheet_header_needs_the_same_cache_on_every_use(self):
+        mixed = self.HEADING.format(c="n").replace("),n[41]=Me)", "),t[41]=Me)")
+        self.assertIsNone(re.search(patch_app.USAGE_SHEET_HEADER_PATTERN, mixed))
 
 
 if __name__ == "__main__":

@@ -1959,6 +1959,26 @@ def patch_chunked_usage_state(modal: str) -> str:
     )
 
 
+_IDENT = r"[\w$]+"
+# The profile menu component. Builds from 26.1002 add a `hideUsage` prop and default it on the next
+# statement; both shapes are accepted and nothing else is.
+PROFILE_MENU_HEADER_PATTERN = (
+    rf"function ({_IDENT})\(e\)\{{let {_IDENT}=\(0,{_IDENT}\.c\)\(\d+\),"
+    rf"\{{sidebarFooter:{_IDENT},ambientUsage:{_IDENT},(?:hideUsage:{_IDENT},)?open:{_IDENT},onClose:{_IDENT}\}}=e,"
+    rf"(?:{_IDENT}={_IDENT}!==void 0&&{_IDENT},)?"
+    rf"({_IDENT})=({_IDENT})\(({_IDENT})\),"
+)
+# The Usage sheet's header. The compiler's memo-cache array is `t` in some builds and `n` in
+# others, so its name is read from the build and must be the same on every use.
+USAGE_SHEET_HEADER_PATTERN = (
+    rf"let (?P<var>{_IDENT});(?P<cache>{_IDENT})\[(?P<index>\d+)\]===Symbol\.for\(`react\.memo_cache_sentinel`\)\?"
+    rf"\((?P=var)=\(0,(?P<jsx>{_IDENT})\.jsx\)\((?P<component>{_IDENT}),\{{children:"
+    rf"(?P<children>\(0,(?P=jsx)\.jsx\)\({_IDENT},\{{title:.{{0,600}}?"
+    r"description:`Heading for the Codex usage limit modal`\}\)\}\)\}\)\}\))"
+    r"\}\),(?P=cache)\[(?P=index)\]=(?P=var)\):(?P=var)=(?P=cache)\[(?P=index)\];"
+)
+
+
 def patch_chunked_renderer(webview: Path, token: str) -> None:
     """Patch builds (12246+) whose menu, usage sheet and helpers are split.
 
@@ -1985,13 +2005,7 @@ def patch_chunked_renderer(webview: Path, token: str) -> None:
             raise RuntimeError(f"source app already contains the multiplexer ({where})")
 
     # --- profile menu chunk: resolve the names the injected menu uses ---
-    header = _match_once(
-        menu,
-        rf"function ({ident})\(e\)\{{let {ident}=\(0,{ident}\.c\)\(\d+\),"
-        rf"\{{sidebarFooter:{ident},ambientUsage:{ident},open:{ident},onClose:{ident}\}}=e,"
-        rf"({ident})=({ident})\(({ident})\),",
-        "the native profile menu component",
-    )
+    header = _match_once(menu, PROFILE_MENU_HEADER_PATTERN, "the native profile menu component")
     scope_variable, scope_hook, scope_key = header.group(2, 3, 4)
     menu_start = header.start()
     menu_body = menu[menu_start : menu_start + 200_000]
@@ -2193,14 +2207,10 @@ def patch_chunked_renderer(webview: Path, token: str) -> None:
     )
     modal = _sub_once(
         modal,
-        rf"let ({ident});t\[(\d+)\]===Symbol\.for\(`react\.memo_cache_sentinel`\)\?"
-        rf"\(\1=\(0,({ident})\.jsx\)\(({ident}),\{{children:"
-        r"(\(0,\3\.jsx\)\(" + ident + r",\{title:.{0,600}?"
-        r"description:`Heading for the Codex usage limit modal`\}\)\}\)\}\)\}\))"
-        r"\}\),t\[\2\]=\1\):\1=t\[\2\];",
+        USAGE_SHEET_HEADER_PATTERN,
         lambda m: (
-            f"let {m.group(1)}=(0,{m.group(3)}.jsxs)({m.group(4)},{{children:["
-            f"{m.group(5)},window.__codexMuxResetAccountSelector??null]}});"
+            f"let {m['var']}=(0,{m['jsx']}.jsxs)({m['component']},{{children:["
+            f"{m['children']},window.__codexMuxResetAccountSelector??null]}});"
         ),
         "the native Usage sheet header",
     )

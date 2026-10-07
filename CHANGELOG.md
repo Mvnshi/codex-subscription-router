@@ -30,7 +30,9 @@ this project uses [Semantic Versioning](https://semver.org/).
 - macOS: the profile menu anchor accepts the `hideUsage` prop that builds from `26.1002` add, and the Usage
   sheet header anchor reads the memo-cache name instead of assuming `t`; both are tested on text from the
   real bundles. The newest build (`13417`) still stops at the pinned chat summary, whose section list was
-  split into groups, and stays unsupported until that is ported and checked in a real window.
+  split into groups, and stays unsupported until that is ported and checked in a real window. The Windows
+  Store build `26.1002.6548.0` stops at the same anchor, because the two patchers share it.
+- The canary reports the patcher's own error instead of the installer's closing "failed with exit code N" line.
 - Add `scripts/probe_mac_asar.py` to run the macOS patcher's archive-editing steps against any official build
   on any OS, `docs/MAINTAINING.md` (the whole routine), bug and idea issue forms, `SUPPORT.md`,
   `CODEOWNERS`, a pull request template that asks for evidence, and grouped Dependabot updates.

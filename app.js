@@ -86,6 +86,13 @@ tabs.forEach((tab, index) => {
   });
 });
 
+// Show the install steps for the computer the page is open on; either tab can still be chosen.
+const platformHint = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.userAgent || "";
+if (/windows/i.test(platformHint)) {
+  const windowsTab = document.getElementById("tab-windows");
+  if (windowsTab) selectTab(windowsTab);
+}
+
 document.querySelectorAll("[data-copy]").forEach((button) => {
   let feedbackTimer;
   button.addEventListener("click", async () => {

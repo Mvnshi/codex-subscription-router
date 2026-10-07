@@ -27,6 +27,10 @@ this project uses [Semantic Versioning](https://semver.org/).
   stronger level.
 - macOS: the default expected count of Computer Use references in the archive is 16, which is what every
   build since 7746 has; the newest build failed on the old default of 17 and nothing else.
+- macOS: the profile menu anchor accepts the `hideUsage` prop that builds from `26.1002` add, and the Usage
+  sheet header anchor reads the memo-cache name instead of assuming `t`; both are tested on text from the
+  real bundles. The newest build (`13417`) still stops at the pinned chat summary, whose section list was
+  split into groups, and stays unsupported until that is ported and checked in a real window.
 - Add `scripts/probe_mac_asar.py` to run the macOS patcher's archive-editing steps against any official build
   on any OS, `docs/MAINTAINING.md` (the whole routine), bug and idea issue forms, `SUPPORT.md`,
   `CODEOWNERS`, a pull request template that asks for evidence, and grouped Dependabot updates.

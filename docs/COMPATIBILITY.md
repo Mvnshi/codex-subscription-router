@@ -181,9 +181,10 @@ Not yet exercised on Windows:
 - a model-driven Computer Use turn (the helper reports every open window's title
   to the model, which was not asked for), and Computer Use being off by default in
   OpenAI's Windows build
-- the patched app on ARM64 hardware. The multiplexer and launcher are built for
-  the architecture of the official host, and CI runs the Go tests on a real
-  `windows-11-arm` runner and checks both come out as ARM64
+- routing and the rest of the smoke test on ARM64. The canary has run the installer,
+  the patch and the boot (control API healthy, window loaded) on a real `windows-11-arm`
+  runner against the Store's ARM64 package `26.930.7945.0`, with the multiplexer and
+  launcher built natively for ARM64, and CI runs the Go tests there too
 - how the engine sandboxes commands without the Store's sandbox service
 
 Run [SMOKE-TEST.md](SMOKE-TEST.md) to complete them.

@@ -80,10 +80,11 @@ powershell -File scripts/test-install.ps1                     # Windows installe
   `scripts/patch_app_windows.py` for Windows) edit the official app only where a pattern matches
   exactly the expected number of times, and stop otherwise. Never weaken one to make a build pass;
   review the upstream change and update the pattern deliberately, with a test.
-- **New official builds** arrive about daily. A build the project has not recorded is refused unless
-  the installer is told otherwise (`--check-source` reports it with exit code 3); recording one means
-  adding its identity to `TESTED_SOURCE_BUILDS` / `TESTED_WINDOWS_SOURCE_BUILDS` and to
-  [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md), with the evidence.
+- **New official builds** arrive about daily. A watcher and a daily canary track them and keep one open
+  issue per platform; if you were asked to handle one, follow [docs/MAINTAINING.md](docs/MAINTAINING.md)
+  (`scripts/record_build.py` records a passing canary result; `scripts/probe_mac_asar.py` investigates a
+  macOS failure without a Mac). A build the project has not recorded makes the installer ask
+  (`--check-source` reports it with exit code 3); only a person promotes a build to *tested*.
 - **Claims must match evidence.** What was verified, and what was not, is recorded in
   [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md); the website and README repeat only that.
 - Releases are source-only. Never commit an app bundle, `.exe`, signing material, account data or

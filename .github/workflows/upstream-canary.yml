@@ -423,9 +423,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/upstream_issues.py canary results/canary-*.json | tee -a "${GITHUB_STEP_SUMMARY}"
 
-      # A canary that cannot pass is the point of the canary: fail the run so it shows.
+      # A canary that cannot pass is the point of the canary: fail the run so it shows. Pull requests
+      # only report: upstream changing under a pull request is not the pull request's fault.
       - name: Fail the run when a platform does not pass
-        if: always()
+        if: always() && github.event_name != 'pull_request'
         run: |
           python3 - <<'PY'
           import glob, json, sys

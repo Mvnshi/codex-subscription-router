@@ -7,8 +7,8 @@ routes, switches and moves chats between two real subscriptions; its usage
 sheet with per-account resets and its per-account plugin connections work too
 (checked live, see [COMPATIBILITY.md](COMPATIBILITY.md)). Computer Use is off in
 OpenAI's Windows build unless the environment turns it on, and the router leaves
-that alone. ARM64 builds natively and is tested in CI, but the app has not run on
-ARM64 hardware. The first version of this port (written without a Windows build
+that alone. On ARM64 the installer, the patch and the boot have been exercised on a
+real ARM64 Windows runner (routing was not tried there). The first version of this port (written without a Windows build
 to test against) was wrong about the one thing that matters most; see
 [Observed on the Store build](#observed-on-the-store-build).
 
@@ -529,8 +529,10 @@ app's code (`role: quit`); clicking it was not exercised.
   from the toolchain's default, so an emulated x64 Go on an ARM64 PC still builds
   for the app it sits next to. CI cross-compiles both and, on a real
   `windows-11-arm` runner, runs the Go tests and checks that both programs come out
-  as ARM64 PE files. The patched app itself has not run on ARM64 hardware: the
-  Store package cannot be installed on a runner.
+  as ARM64 PE files. The canary also installs the Store's ARM64 package on that runner
+  (winget is added to the image first), runs the real installer against it and boots the
+  patched app: control API healthy, window loaded, on `OpenAI.Codex` `26.930.7945.0`.
+  Routing, accounts and the rest of SMOKE-TEST.md have only been run on x64.
 - SmartScreen and Defender behaviour towards the unsigned rewritten executable
   and the unsigned Go binaries is untested.
 - Taskbar grouping: pins point at `Codex Subscription Router.exe` while the
@@ -671,6 +673,6 @@ tests have passed, and so have the usage sheet's per-account reset flow
 (with simulated balances) and the per-account plugin connections in the live
 window. Not exercised: a real reset redemption (it spends a credit, and the code
 is the same HTTP call the macOS build ran against the real API), a model-driven
-Computer Use turn, the app on ARM64 hardware, and the reactive failover against
-the real engine. Do not drop the provisional label before
+Computer Use turn, routing on ARM64, and the reactive failover against the real
+engine. Do not drop the provisional label before
 [SMOKE-TEST.md](SMOKE-TEST.md) is complete.

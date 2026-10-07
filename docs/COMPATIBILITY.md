@@ -38,6 +38,17 @@ Windows through the Microsoft Store (the Store title is now "ChatGPT"; the packa
 `OpenAI.Codex`). The two platforms share app builds: Store package `26.930.3930.0` is app
 `26.930.31730`, build `12947`, the same build the macOS feed lists.
 
+**macOS newer than the tested builds.** The daily canary downloads the newest build from OpenAI's
+update feed on a real macOS runner and runs the installer against it with an ad-hoc signature. Build
+`26.930.61225` (`13232`) patched and signed there once the expected count of Computer Use references was
+corrected from 17 to 16 (every build since `7746` has 16); the signed app was not started (a runner
+cannot answer GUI prompts), so it is not recorded as verified and has not been run on a Mac by the
+project. The next release line, `26.1002.51308` (`13417`), gets past the profile menu and the Usage sheet
+header (both follow the new shape exactly, with tests) and stops at the pinned chat summary, whose section
+list is now split into groups; a deliberate port that can be checked in a real window is still to do, so
+that build is not supported and the watcher keeps an issue open for it. `scripts/probe_mac_asar.py`
+reproduces this on any computer.
+
 Two levels are recorded, and the installers treat them differently:
 
 - **Tested by hand**: the tables in the sections below, checked against

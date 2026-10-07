@@ -19,7 +19,8 @@ function Test-Case {
     $script:count++
     $savedEnvironment = @{}
     foreach ($variable in 'CODEX_SUBSCRIPTION_ROUTER_DRY_RUN', 'CODEX_SUBSCRIPTION_ROUTER_ASSUME_YES',
-        'CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE', 'CODEX_SUBSCRIPTION_ROUTER_NO_DESKTOP_SHORTCUT', 'Path') {
+        'CODEX_SUBSCRIPTION_ROUTER_ALLOW_UNTESTED_SOURCE', 'CODEX_SUBSCRIPTION_ROUTER_NO_DESKTOP_SHORTCUT',
+        'CODEX_SUBSCRIPTION_ROUTER_ALLOW_ELEVATED', 'Path') {
         $savedEnvironment[$variable] = [Environment]::GetEnvironmentVariable($variable, 'Process')
     }
     try {
@@ -61,12 +62,28 @@ Test-Case 'options come from switches and from environment variables' {
 }
 
 Test-Case 'options are off by default' {
-    foreach ($name in 'ASSUME_YES', 'NO_DESKTOP_SHORTCUT', 'ALLOW_UNTESTED_SOURCE') {
-        [Environment]::SetEnvironmentVariable("CODEX_SUBSCRIPTION_ROUTER_$name", $null, 'Process')
+    foreach ($variable in 'ASSUME_YES', 'NO_DESKTOP_SHORTCUT', 'ALLOW_UNTESTED_SOURCE', 'ALLOW_ELEVATED') {
+        [Environment]::SetEnvironmentVariable("CODEX_SUBSCRIPTION_ROUTER_$variable", $null, 'Process')
     }
     . $installerPath
     Assert-True (-not $Options.AssumeYes)
     Assert-True (-not $Options.NoDesktopShortcut)
+    Assert-True (-not $Options.AllowElevated) 'an administrator shell must be refused unless CI says otherwise'
+}
+
+Test-Case 'an administrator shell is refused unless ALLOW_ELEVATED says it is a CI runner' {
+    $env:CODEX_SUBSCRIPTION_ROUTER_ALLOW_ELEVATED = '1'
+    . $installerPath
+    Assert-True $Options.AllowElevated
+    function Fail { param([string]$Reason); throw "FAIL: $Reason" }
+    function Test-Elevated { return $true }
+    function Test-WindowsHost { return $true }
+    function Get-PrerequisiteStatus { throw 'reached the tool check' }
+    # With the setting, the elevation check passes and the next step runs.
+    Assert-Fails { Assert-Prerequisite } 'reached the tool check'
+    # Without it, the installer stops at the elevation check.
+    $Options.AllowElevated = $false
+    Assert-Fails { Assert-Prerequisite } 'running as administrator'
 }
 
 Test-Case 'Update-SessionPath keeps the session entries, adds the registry ones, and repeats nothing' {

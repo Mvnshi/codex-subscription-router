@@ -1,0 +1,48 @@
+{
+  "_comment": "Official builds the project has recorded beyond its hand-curated TESTED tables. scripts/record_build.py edits this file from a canary result; the patchers read it. level 'tested' entries mirror the TESTED tables in the patchers, 'verified' ones are the canary's (patched with every anchor matching, and on Windows booted).",
+  "windows": {
+    "packages": {
+      "26.930.3930.0": {
+        "app": "26.930.31730",
+        "build": "12947",
+        "level": "tested",
+        "host": [
+          "154.0.8037.98",
+          "154.0.8037.98"
+        ],
+        "asar": {
+          "x64": "af98213984ec4556778ef9276193d51460153fb9b30fded882d503637b84abba"
+        }
+      },
+      "26.930.6422.0": {
+        "app": "26.930.51102",
+        "build": "13100",
+        "level": "verified",
+        "host": [
+          "154.0.8037.98",
+          "154.0.8037.98"
+        ],
+        "asar": {
+          "x64": "bdff0036791292cb315ff25c2b836ba35addedd2327f25dd471c38df791194dd"
+        },
+        "note": "rebuilt on the maintainer's PC: patched, launched, control API healthy, both accounts connected"
+      },
+      "26.930.7945.0": {
+        "app": "26.930.61225",
+        "build": "13232",
+        "level": "verified",
+        "host": [
+          "154.0.8037.98",
+          "154.0.8037.98"
+        ],
+        "asar": {
+          "arm64": "12c29fce16d17383c687f820b660ee4ee7e139b6b50184ae1d13d0a733b57bd6",
+          "x64": "611d6da979d8bbabfec97dd90dcce27a9522e7016e6ccf135d59cab693ab08da"
+        }
+      }
+    }
+  },
+  "macos": {
+    "builds": {}
+  }
+}

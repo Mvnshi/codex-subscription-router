@@ -11,6 +11,9 @@ Maintained by [Mvnshi](https://github.com/Mvnshi), based on
 with community compatibility work and its original authorship preserved. See
 [branch status and credits](docs/MAINTAINED.md).
 
+[![CI](https://github.com/Mvnshi/codex-subscription-router/actions/workflows/ci.yml/badge.svg)](https://github.com/Mvnshi/codex-subscription-router/actions/workflows/ci.yml)
+[![Newest official build](https://github.com/Mvnshi/codex-subscription-router/actions/workflows/upstream-canary.yml/badge.svg)](https://github.com/Mvnshi/codex-subscription-router/actions/workflows/upstream-canary.yml)
+
 [Website](https://mvnshi.github.io/codex-subscription-router/) ·
 [Get started](#get-started) ·
 [Troubleshooting](#windows-troubleshooting) ·
@@ -99,6 +102,17 @@ The repository carries instructions for assistants in [AGENTS.md](AGENTS.md).
 - **Something wrong?** Run the read-only [doctor](#when-something-goes-wrong) and
   [open an issue](https://github.com/Mvnshi/codex-subscription-router/issues/new/choose).
 
+## It keeps up with the app
+
+The official app updates about every day, so the project checks itself every day. Every few hours a
+workflow compares the newest official builds (macOS update feed, Microsoft Store) with the ones the
+project has recorded and keeps one open issue per platform while the newest is unrecorded. Every day
+a canary installs the newest build on clean macOS, Windows and Windows ARM64 machines, runs the real
+installer against it and, on Windows, starts the patched app. The badge above is that canary. A build
+nobody has recorded yet is never refused: the installer says so and asks, and every patch step still
+stops by itself if the app changed. How builds get recorded is in
+[docs/MAINTAINING.md](docs/MAINTAINING.md).
+
 ## Highlights
 
 - **Quota-aware routing.** New chats favour weekly allowance that will expire
@@ -160,8 +174,9 @@ Microsoft Store build `26.930.3930.0` (app build `12947`), provisionally: it
 patches, launches beside the official app, and routes, switches and moves chats
 between two real subscriptions, and its usage sheet with per-account resets and
 per-account plugin connections work (checked live). Computer Use is off by default
-in OpenAI's Windows build and the router leaves that alone; ARM64 is built and
-tested in CI but not yet run on ARM64 hardware. See
+in OpenAI's Windows build and the router leaves that alone; on ARM64 the installer,
+the patch and the boot are exercised daily on a real ARM64 Windows runner (routing
+was not tried there). See
 [the Windows port notes](docs/WINDOWS.md).
 
 Codex Router currently targets:
@@ -169,7 +184,7 @@ Codex Router currently targets:
 | Component | Supported value |
 | --- | --- |
 | Platform: macOS | Apple silicon, tested against the builds below |
-| Platform: Windows | x64, **provisional**: tested against the Microsoft Store build below; every anchor is checked at run time and any other build needs `--allow-untested-source`. ARM64 builds natively and is tested in CI, but the app has not run on ARM64 hardware |
+| Platform: Windows | x64, **provisional**: tested against the Microsoft Store build below; every anchor is checked at run time and any other build needs `--allow-untested-source`. ARM64 builds natively, and the installer, patch and boot are exercised daily on a real ARM64 Windows runner; routing has only been tried on x64 |
 | Official ChatGPT versions (macOS) | `26.803.61601` (build `6396`), `26.810.52044` (build `6662`), `26.901.22334` (build `7746`), `26.901.51231` (build `8109`), `26.928.20755` (build `12246`, provisional) |
 | Official ChatGPT versions (Windows) | `OpenAI.Codex` `26.930.3930.0` from the Microsoft Store (app `26.930.31730`, build `12947`, provisional) |
 | Go | 1.26 or newer |
@@ -199,7 +214,7 @@ You need the official app. The installer takes care of the build tools.
 
 ### Windows
 
-- 64-bit Windows 10 or 11 (x64 tested; ARM64 builds natively but is not yet run on hardware)
+- 64-bit Windows 10 or 11 (x64 tested by hand; ARM64 installs and boots in CI)
 - The official Codex desktop app installed from the **Microsoft Store** (the package
   `OpenAI.Codex`; OpenAI ships the Windows app only this way). The patcher finds it through the
   package registry, reads its files and copies them to a normal folder; the Store package itself
@@ -306,8 +321,8 @@ Appshots and Computer Use may not function with an ad-hoc signature.
 > multiplexer, connects accounts, and routes, switches and moves chats between
 > two real subscriptions, with the usage sheet's per-account resets and the
 > per-account plugin connections working); a real reset redemption, Computer Use
-> and the app on ARM64 hardware are not yet exercised. A different Store build is refused until
-> `--allow-untested-source` is passed, and every layout assumption is checked at
+> and routing on ARM64 are not yet exercised. A Store build the project has not
+> recorded makes the installer explain and ask, and every layout assumption is checked at
 > run time instead of assumed. Read [the Windows port notes](docs/WINDOWS.md)
 > first.
 
@@ -664,7 +679,7 @@ latest completed run is recorded in
 - The Windows port is provisional: verified on one Store build to patch,
   launch, connect accounts, and route, switch and move chats between two real
   subscriptions, with per-account resets and plugin connections working in the
-  live window. A real reset redemption and the app on ARM64 hardware have not
+  live window. A real reset redemption and routing on ARM64 have not
   been exercised, and the reactive failover (a turn the engine itself reports as
   over its limit) is covered only by automated tests. The Windows copy is
   unsigned, has no package identity (so no Store-managed sandbox service,

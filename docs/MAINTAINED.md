@@ -30,8 +30,8 @@ provisionally: the Microsoft Store package `OpenAI.Codex` `26.930.3930.0`
 accounts, and routes, switches and moves chats between two real subscriptions
 (checked live, plus automated end-to-end tests), and its per-account reset flow
 and plugin connections work in the live window; a real reset redemption, a
-model-driven Computer Use turn and the app on ARM64 hardware have not been
-exercised. Any other Windows build is refused until `--allow-untested-source` is
+model-driven Computer Use turn and routing on ARM64 have not been
+exercised (ARM64 installs, patches and boots in CI). Any other Windows build is refused until `--allow-untested-source` is
 passed.
 
 ## Known gaps
@@ -46,9 +46,12 @@ passed.
 4. The signed desktop smoke matrix should run before any release tag.
 5. Windows: finish the smoke test on build `12947` (a real reset redemption, the
    reactive failover against the real engine) and drop the provisional label, as
-   described in [WINDOWS.md](WINDOWS.md). Also run the app on ARM64 hardware
-   (CI already tests the programs there), and decide how to carry the
+   described in [WINDOWS.md](WINDOWS.md). Also try routing on ARM64 (CI already
+   installs, patches and boots the app there), and decide how to carry the
    Store-managed Windows sandbox service (see WINDOWS.md) into the copy.
+6. Keeping up with the official app is automated and documented in
+   [MAINTAINING.md](MAINTAINING.md). macOS builds are not recorded as verified until
+   the canary can start the app on a macOS runner.
 
 ## Install
 

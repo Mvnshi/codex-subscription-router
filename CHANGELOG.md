@@ -9,6 +9,28 @@ this project uses [Semantic Versioning](https://semver.org/).
   requires confirmation; automatic redemption is opt-in, follows account
   failover, and prevents concurrent or uncertain requests from draining credits.
 
+### Keeping up with official builds
+
+- Add `scripts/upstream_watch.py` and `.github/workflows/upstream-watch.yml`: every six hours the newest
+  official builds (macOS update feed, Microsoft Store catalog) are compared with the recorded ones, and one
+  tracking issue per platform is opened, refreshed or closed (`scripts/upstream_issues.py`).
+- Add `.github/workflows/upstream-canary.yml`: every day it installs the newest official build on clean
+  macOS, Windows x64 and Windows ARM64 runners, runs the real installer against it and, on Windows, boots
+  the patched app (`scripts/boot-check.ps1`: control API healthy, window drew its page). The result goes into
+  the tracking issue. It also runs for pull requests that touch the patchers and for `canary/**` branches.
+  First results: the newest Windows build (`26.930.7945.0`, app build `13232`) installs, patches and boots on
+  x64 and on real ARM64 Windows; the newest macOS build patched after a one-number fix (below).
+- A second level of recorded build, "verified by the canary", kept in `scripts/recorded_builds.json` and
+  accepted without `--allow-untested-source`; `scripts/record_build.py` adds one from a canary result and
+  regenerates the table in `docs/COMPATIBILITY.md`. Builds `26.930.6422.0` (rebuilt and run on the
+  maintainer's PC) and `26.930.7945.0` (x64 and ARM64) are recorded. Hand-tested builds stay a separate,
+  stronger level.
+- macOS: the default expected count of Computer Use references in the archive is 16, which is what every
+  build since 7746 has; the newest build failed on the old default of 17 and nothing else.
+- Add `scripts/probe_mac_asar.py` to run the macOS patcher's archive-editing steps against any official build
+  on any OS, `docs/MAINTAINING.md` (the whole routine), bug and idea issue forms, `SUPPORT.md`,
+  `CODEOWNERS`, a pull request template that asks for evidence, and grouped Dependabot updates.
+
 ### Setup and launch
 
 - Make installing possible without knowing what a terminal is. `install.ps1` offers to install

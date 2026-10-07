@@ -31,6 +31,37 @@ default; `--allow-untested-source` is an explicit diagnostic override. Never
 weaken an anchor-count or binary-constant check merely to make a new build
 complete. Review the upstream change and update the patch deliberately.
 
+## Recorded builds
+
+OpenAI ships a new build of the app about every day, on macOS through an update feed and on
+Windows through the Microsoft Store (the Store title is now "ChatGPT"; the package is still
+`OpenAI.Codex`). The two platforms share app builds: Store package `26.930.3930.0` is app
+`26.930.31730`, build `12947`, the same build the macOS feed lists.
+
+Two levels are recorded, and the installers treat them differently:
+
+- **Tested by hand**: the tables in the sections below, checked against
+  [SMOKE-TEST.md](SMOKE-TEST.md) as far as each section says.
+- **Verified by the canary**: a build that the daily canary
+  ([upstream-canary.yml](../.github/workflows/upstream-canary.yml)) installed on a clean machine,
+  ran the real installer against with every patch anchor matching, and, on Windows, booted (control
+  API healthy, window loaded). Routing, switching and failover were not re-run on it, so it is a
+  weaker statement than a tested build, but it is enough to install without being asked.
+
+A build in neither list is not refused: the installers explain that it is newer than the recorded
+builds and ask. Every patch step still checks the app and stops by itself if it changed. This table
+is generated from `scripts/recorded_builds.json` by `scripts/record_build.py`; see
+[MAINTAINING.md](MAINTAINING.md) for how builds get recorded.
+
+<!-- recorded-builds:begin -->
+| Platform | Official build | App version / build | `app.asar` SHA-256 | How far it was checked |
+| --- | --- | --- | --- | --- |
+| Windows arm64 | `OpenAI.Codex` `26.930.7945.0` | `26.930.61225` / `13232` | `12c29fce16d17383c687f820b660ee4ee7e139b6b50184ae1d13d0a733b57bd6` | verified by the canary (patched with every anchor matching; on Windows also booted) |
+| Windows x64 | `OpenAI.Codex` `26.930.7945.0` | `26.930.61225` / `13232` | `611d6da979d8bbabfec97dd90dcce27a9522e7016e6ccf135d59cab693ab08da` | verified by the canary (patched with every anchor matching; on Windows also booted) |
+| Windows x64 | `OpenAI.Codex` `26.930.6422.0` | `26.930.51102` / `13100` | `bdff0036791292cb315ff25c2b836ba35addedd2327f25dd471c38df791194dd` | verified by the canary (patched with every anchor matching; on Windows also booted) |
+| Windows x64 | `OpenAI.Codex` `26.930.3930.0` | `26.930.31730` / `12947` | `af98213984ec4556778ef9276193d51460153fb9b30fded882d503637b84abba` | tested by hand |
+<!-- recorded-builds:end -->
+
 ## Windows (provisional)
 
 | Official package | App version / build | Host `FileVersion` (Chromium) | `app.asar` SHA-256 |
@@ -150,9 +181,10 @@ Not yet exercised on Windows:
 - a model-driven Computer Use turn (the helper reports every open window's title
   to the model, which was not asked for), and Computer Use being off by default in
   OpenAI's Windows build
-- the patched app on ARM64 hardware. The multiplexer and launcher are built for
-  the architecture of the official host, and CI runs the Go tests on a real
-  `windows-11-arm` runner and checks both come out as ARM64
+- routing and the rest of the smoke test on ARM64. The canary has run the installer,
+  the patch and the boot (control API healthy, window loaded) on a real `windows-11-arm`
+  runner against the Store's ARM64 package `26.930.7945.0`, with the multiplexer and
+  launcher built natively for ARM64, and CI runs the Go tests there too
 - how the engine sandboxes commands without the Store's sandbox service
 
 Run [SMOKE-TEST.md](SMOKE-TEST.md) to complete them.

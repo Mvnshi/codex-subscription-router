@@ -146,6 +146,30 @@ TESTED_WINDOWS_SOURCE_BUILDS: dict[tuple[str, str], str | tuple[str, ...]] = {
     ),
 }
 
+# What the project has recorded beyond the hand-curated table above lives in
+# scripts/recorded_builds.json, which scripts/record_build.py edits from a canary result.
+# "verified" builds are ones the canary (.github/workflows/upstream-canary.yml) installed from
+# the Store on a clean machine, patched with every anchor matching, and booted (control API
+# healthy, renderer loaded). That is weaker than TESTED: routing, switching and failover were
+# not run on them. They are accepted without --allow-untested-source, and the patcher says which
+# level a build has. Store package version -> identity, per architecture, is also what
+# scripts/upstream_watch.py compares the Store catalog against.
+RECORDED_BUILDS_FILE = shared.PROJECT_ROOT / "scripts" / "recorded_builds.json"
+WINDOWS_PACKAGE_RECORDS: dict[str, dict] = json.loads(
+    RECORDED_BUILDS_FILE.read_text(encoding="utf-8")
+)["windows"]["packages"]
+
+
+def _verified_windows_builds() -> dict[tuple[str, str], tuple[str, ...]]:
+    verified: dict[tuple[str, str], list[str]] = {}
+    for record in WINDOWS_PACKAGE_RECORDS.values():
+        if record["level"] == "verified":
+            verified.setdefault(tuple(record["host"]), []).extend(record["asar"].values())
+    return {key: tuple(hashes) for key, hashes in verified.items()}
+
+
+CANARY_VERIFIED_WINDOWS_SOURCE_BUILDS: dict[tuple[str, str], str | tuple[str, ...]] = _verified_windows_builds()
+
 # Top-level executables that are never the Electron host: Squirrel's
 # uninstaller/updater stubs and NSIS uninstallers. Matched case-insensitively
 # with fnmatch against the file name.
@@ -703,13 +727,21 @@ class UntestedSourceError(RuntimeError):
     """The official build is not recorded as tested (nothing else is wrong with it yet)."""
 
 
-def approve_source(identity: SourceIdentity, allow_untested: bool) -> None:
-    recorded = TESTED_WINDOWS_SOURCE_BUILDS.get(
-        (identity.product_version, identity.file_version)
-    )
-    allowed = (recorded,) if isinstance(recorded, str) else tuple(recorded or ())
-    if identity.asar_sha256 in allowed:
-        return
+def recorded_hashes(table: dict, identity: SourceIdentity) -> tuple[str, ...]:
+    recorded = table.get((identity.product_version, identity.file_version))
+    return (recorded,) if isinstance(recorded, str) else tuple(recorded or ())
+
+
+def approve_source(identity: SourceIdentity, allow_untested: bool) -> str:
+    """Accept a recorded build; returns how far it was checked ("tested" or "verified")."""
+    if identity.asar_sha256 in recorded_hashes(TESTED_WINDOWS_SOURCE_BUILDS, identity):
+        return "tested"
+    if identity.asar_sha256 in recorded_hashes(CANARY_VERIFIED_WINDOWS_SOURCE_BUILDS, identity):
+        print(
+            "This official build is recorded as verified by the project's canary: it patched "
+            "and booted on a clean machine; routing was not re-tested on it."
+        )
+        return "verified"
     if not allow_untested:
         raise UntestedSourceError(
             "the source version, build, or app.asar hash is not approved; "
@@ -720,6 +752,7 @@ def approve_source(identity: SourceIdentity, allow_untested: bool) -> None:
         "the patch will continue only while every expected anchor matches.",
         file=sys.stderr,
     )
+    return "untested"
 
 
 def unreachable_registration_spans(bundle: str) -> list[tuple[int, int]]:

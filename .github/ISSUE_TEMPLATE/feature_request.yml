@@ -1,0 +1,19 @@
+name: An idea
+description: Something the router could do, or do more simply.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to be able to do?
+      description: Describe the situation first (what you were trying to get done), then the change you have in mind.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Which computer is this for?
+      multiple: true
+      options:
+        - Windows
+        - Mac

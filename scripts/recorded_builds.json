@@ -39,10 +39,28 @@
           "arm64": "12c29fce16d17383c687f820b660ee4ee7e139b6b50184ae1d13d0a733b57bd6",
           "x64": "611d6da979d8bbabfec97dd90dcce27a9522e7016e6ccf135d59cab693ab08da"
         }
+      },
+      "26.1002.7124.0": {
+        "app": "26.1002.52244",
+        "build": "13536",
+        "level": "verified",
+        "host": [
+          "155.0.8059.27",
+          "155.0.8059.27"
+        ],
+        "asar": {
+          "x64": "76fe7078248c00e4e03dd2177a4275ec9ce158a9dd43452a4f0427d39a4ed012",
+          "arm64": "0b1e1aac86957a62df3c8bddda113b468e8fbee9ea1e57659ab4f8c071872a5e"
+        }
       }
     }
   },
   "macos": {
-    "builds": {}
+    "builds": {
+      "26.1002.52244/13536": {
+        "level": "verified",
+        "asar": "40efd7acdf03a24817fcd7f35684fc2173b154df06774243cb4ab227e36fa915"
+      }
+    }
   }
 }

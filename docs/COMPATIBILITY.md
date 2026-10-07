@@ -50,7 +50,11 @@ elements before, eight now, the router's row still goes after the fifth). On Win
 built from `26.1002.7124.0` started on a PC, opened an existing chat and showed the Subscription row in the
 summary panel with the account's remaining usage. Routing, moving a chat and failover were not re-run on it,
 the change was not run on ARM64 beyond the canary's boot check, and the macOS side of it has not been run on a
-Mac. Until the canary records a build, or someone tests it by hand, the installers still ask first.
+Mac. The canary has since recorded `26.1002.52244` as verified on all three platforms (macOS `13536`;
+Windows Store `26.1002.7124.0` on x64 and ARM64): every anchor matched on a clean runner and the patched app
+started (on macOS the signature was valid, the control API answered and the window loaded). The Windows x64
+`app.asar` is byte-for-byte the one the hand check above used. A build that is not recorded still makes the
+installers ask first.
 `scripts/probe_mac_asar.py` reproduces the macOS patch steps on any computer.
 
 Two levels are recorded, and the installers treat them differently:
@@ -71,10 +75,13 @@ is generated from `scripts/recorded_builds.json` by `scripts/record_build.py`; s
 <!-- recorded-builds:begin -->
 | Platform | Official build | App version / build | `app.asar` SHA-256 | How far it was checked |
 | --- | --- | --- | --- | --- |
+| Windows arm64 | `OpenAI.Codex` `26.1002.7124.0` | `26.1002.52244` / `13536` | `0b1e1aac86957a62df3c8bddda113b468e8fbee9ea1e57659ab4f8c071872a5e` | verified by the canary (patched with every anchor matching; on Windows also booted) |
+| Windows x64 | `OpenAI.Codex` `26.1002.7124.0` | `26.1002.52244` / `13536` | `76fe7078248c00e4e03dd2177a4275ec9ce158a9dd43452a4f0427d39a4ed012` | verified by the canary (patched with every anchor matching; on Windows also booted) |
 | Windows arm64 | `OpenAI.Codex` `26.930.7945.0` | `26.930.61225` / `13232` | `12c29fce16d17383c687f820b660ee4ee7e139b6b50184ae1d13d0a733b57bd6` | verified by the canary (patched with every anchor matching; on Windows also booted) |
 | Windows x64 | `OpenAI.Codex` `26.930.7945.0` | `26.930.61225` / `13232` | `611d6da979d8bbabfec97dd90dcce27a9522e7016e6ccf135d59cab693ab08da` | verified by the canary (patched with every anchor matching; on Windows also booted) |
 | Windows x64 | `OpenAI.Codex` `26.930.6422.0` | `26.930.51102` / `13100` | `bdff0036791292cb315ff25c2b836ba35addedd2327f25dd471c38df791194dd` | verified by the canary (patched with every anchor matching; on Windows also booted) |
 | Windows x64 | `OpenAI.Codex` `26.930.3930.0` | `26.930.31730` / `12947` | `af98213984ec4556778ef9276193d51460153fb9b30fded882d503637b84abba` | tested by hand |
+| macOS | ChatGPT `26.1002.52244` | `26.1002.52244` / `13536` | `40efd7acdf03a24817fcd7f35684fc2173b154df06774243cb4ab227e36fa915` | verified by the canary (patched with every anchor matching; on Windows also booted) |
 <!-- recorded-builds:end -->
 
 ## Windows (provisional)

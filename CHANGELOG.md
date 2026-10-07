@@ -34,7 +34,8 @@ this project uses [Semantic Versioning](https://semver.org/).
   nine) and keeps the router's row after the fifth. Both patchers share it, so macOS `13417` and the Windows
   Store builds `26.1002.6548.0` and `26.1002.7124.0` pass this step. On Windows x64 a copy built from
   `26.1002.7124.0` started and showed the Subscription row in a real chat's summary; routing and failover were
-  not re-run on it.
+  not re-run on it. The canary recorded `26.1002.52244` (macOS `13536`, Windows Store `26.1002.7124.0` on x64 and
+  ARM64) as verified, which closes the tracking issues for it.
 - The canary reports the patcher's own error instead of the installer's closing "failed with exit code N" line.
 - Add `scripts/probe_mac_asar.py` to run the macOS patcher's archive-editing steps against any official build
   on any OS, `docs/MAINTAINING.md` (the whole routine), bug and idea issue forms, `SUPPORT.md`,

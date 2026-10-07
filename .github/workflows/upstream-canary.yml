@@ -96,6 +96,7 @@ jobs:
             detail="the signature does not verify: $(head -n 1 codesign.err)"
           else
             export CODEX_MUX_UI_TESTS=1
+            export ELECTRON_ENABLE_LOGGING=1
             "${app}/Contents/MacOS/CodexSubscriptionRouterLauncher" >launch.log 2>&1 &
             token="$(cat "${HOME}/.codex-mux/control-token" 2>/dev/null)"
             for _ in $(seq 1 60); do
@@ -114,6 +115,12 @@ jobs:
               esac
             else
               detail="the control API did not answer within two minutes: $(tail -n 3 launch.log | tr '\n' ' ')"
+              {
+                echo "--- processes"; ps -axo pid,ppid,etime,command | grep -i "codex\|chatgpt" | grep -v grep | head -30
+                echo "--- launch.log"; tail -n 60 launch.log
+                echo "--- signature"; codesign -dvv "${app}" 2>&1 | head -12
+                echo "--- crash reports"; ls -la "${HOME}/Library/Logs/DiagnosticReports" 2>/dev/null | tail -8
+              } > boot-diagnostics.txt 2>&1
             fi
             pkill -f "Codex Subscription Router" 2>/dev/null
           fi
@@ -130,8 +137,11 @@ jobs:
           BOOT_DETAIL: ${{ steps.boot.outputs.detail }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # A macOS runner cannot answer a keychain or GUI prompt the way a Mac with a person can, so
+          # whether the app starts there is reported but does not decide the result.
           python3 scripts/canary.py result --platform macos --log install.log --exit-code "${EXIT_CODE:-1}" \
-            --boot "${BOOT:-skipped}" --boot-detail "${BOOT_DETAIL}" --run-url "${RUN_URL}" --out canary-macos.json
+            --boot "${BOOT:-skipped}" --boot-detail "${BOOT_DETAIL}" --boot-informational \
+            --run-url "${RUN_URL}" --out canary-macos.json
 
       - name: Keep the result
         if: always()
@@ -141,6 +151,9 @@ jobs:
           path: |
             canary-macos.json
             install.log
+            boot-diagnostics.txt
+            launch.log
+          if-no-files-found: ignore
 
   windows-x64:
     runs-on: windows-latest

@@ -115,6 +115,11 @@ def update_docs(text: str, data: dict) -> str:
     return text[:start] + "\n" + render_table(data) + "\n" + text[end:]
 
 
+def write_lf(path: Path, text: str) -> None:
+    """Write with LF endings on every OS (the repository stores LF; Path.write_text would give CRLF on Windows)."""
+    path.write_bytes(text.replace("\r\n", "\n").encode("utf-8"))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("result", type=Path, help="a canary result file")
@@ -134,8 +139,8 @@ def main(argv: list[str] | None = None) -> int:
     data["windows"]["packages"] = dict(
         sorted(data["windows"]["packages"].items(), key=lambda item: version_key(item[0]))
     )
-    DATA_FILE.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    DOCS_FILE.write_text(docs, encoding="utf-8")
+    write_lf(DATA_FILE, json.dumps(data, indent=2) + "\n")
+    write_lf(DOCS_FILE, docs)
     print(f"updated {DATA_FILE.relative_to(ROOT)} and {DOCS_FILE.relative_to(ROOT)}")
     print("Next: run the checks, add a CHANGELOG line, and open a pull request (docs/MAINTAINING.md).")
     return 0

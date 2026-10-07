@@ -56,6 +56,8 @@ is generated from `scripts/recorded_builds.json` by `scripts/record_build.py`; s
 <!-- recorded-builds:begin -->
 | Platform | Official build | App version / build | `app.asar` SHA-256 | How far it was checked |
 | --- | --- | --- | --- | --- |
+| Windows arm64 | `OpenAI.Codex` `26.930.7945.0` | `26.930.61225` / `13232` | `12c29fce16d17383c687f820b660ee4ee7e139b6b50184ae1d13d0a733b57bd6` | verified by the canary (patched with every anchor matching; on Windows also booted) |
+| Windows x64 | `OpenAI.Codex` `26.930.7945.0` | `26.930.61225` / `13232` | `611d6da979d8bbabfec97dd90dcce27a9522e7016e6ccf135d59cab693ab08da` | verified by the canary (patched with every anchor matching; on Windows also booted) |
 | Windows x64 | `OpenAI.Codex` `26.930.6422.0` | `26.930.51102` / `13100` | `bdff0036791292cb315ff25c2b836ba35addedd2327f25dd471c38df791194dd` | verified by the canary (patched with every anchor matching; on Windows also booted) |
 | Windows x64 | `OpenAI.Codex` `26.930.3930.0` | `26.930.31730` / `12947` | `af98213984ec4556778ef9276193d51460153fb9b30fded882d503637b84abba` | tested by hand |
 <!-- recorded-builds:end -->

@@ -61,6 +61,7 @@ def build_result(
     exit_code: int,
     boot: str = "skipped",
     boot_detail: str = "",
+    boot_informational: bool = False,
     package: str = "",
     app_version: str = "",
     build: str = "",
@@ -71,11 +72,14 @@ def build_result(
     failure = extract_failure(log)
     if exit_code != 0:
         status = "fail" if identity else "error"
-    elif boot == "failed":
+    elif boot == "failed" and not boot_informational:
         status = "boot-failed"
     else:
         status = "pass"
     message = failure or (boot_detail if status == "boot-failed" else "")
+    if status == "pass" and boot == "failed":
+        # Reported, not hidden: the patch and the signature passed, the runner could not start the app.
+        message = f"app did not start on the runner (not counted): {boot_detail}"
     if not message and status in ("fail", "error"):
         message = f"the installer exited with code {exit_code} and printed no explanation"
     result = {
@@ -124,6 +128,11 @@ def main(argv: list[str] | None = None) -> int:
     result.add_argument("--exit-code", type=int, required=True)
     result.add_argument("--boot", choices=("ok", "failed", "skipped"), default="skipped")
     result.add_argument("--boot-detail", default="")
+    result.add_argument(
+        "--boot-informational",
+        action="store_true",
+        help="a failed boot is reported but does not fail the result (macOS runners cannot answer GUI prompts)",
+    )
     result.add_argument("--package", default="")
     result.add_argument("--app-version", default="")
     result.add_argument("--build", default="")
@@ -142,6 +151,7 @@ def main(argv: list[str] | None = None) -> int:
             exit_code=args.exit_code,
             boot=args.boot,
             boot_detail=args.boot_detail,
+            boot_informational=args.boot_informational,
             package=args.package,
             app_version=args.app_version,
             build=args.build,

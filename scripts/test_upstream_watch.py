@@ -110,7 +110,9 @@ class GatherTests(unittest.TestCase):
                 raise OSError("connection reset")
             return STORE
 
-        report = watch.gather(fetch)
+        # What is recorded changes as builds are recorded; this test is about the feeds.
+        with mock.patch.object(watch, "recorded_windows", return_value={}),              mock.patch.object(watch, "recorded_macos", return_value={}):
+            report = watch.gather(fetch)
         self.assertEqual(report["errors"], ["macOS appcast: connection reset"])
         self.assertIn("windows-x64", report["needs_attention"])
         self.assertNotIn("macos", report["needs_attention"])

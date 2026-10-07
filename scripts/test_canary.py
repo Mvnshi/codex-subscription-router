@@ -82,6 +82,18 @@ class ResultTests(unittest.TestCase):
         self.assertEqual(result["status"], "boot-failed")
         self.assertEqual(result["message"], "control API never answered")
 
+    def test_an_informational_boot_failure_is_reported_but_does_not_fail_the_result(self):
+        result = canary.build_result(
+            platform="macos", log=MAC_FAIL, exit_code=0, boot="failed", boot_detail="no answer", boot_informational=True
+        )
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["boot"], "failed")
+        self.assertIn("did not start on the runner", result["message"])
+        self.assertIn("no answer", result["message"])
+        # A failed install is still a failure, informational boot or not.
+        failed = canary.build_result(platform="macos", log=MAC_FAIL, exit_code=1, boot="failed", boot_informational=True)
+        self.assertEqual(failed["status"], "fail")
+
     def test_nothing_to_test_is_an_error_not_a_failure_of_the_patch(self):
         result = canary.build_result(platform="windows-arm64", log="winget: no such package", exit_code=1)
         self.assertEqual(result["status"], "error")

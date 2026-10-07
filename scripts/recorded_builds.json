@@ -26,6 +26,19 @@
           "x64": "bdff0036791292cb315ff25c2b836ba35addedd2327f25dd471c38df791194dd"
         },
         "note": "rebuilt on the maintainer's PC: patched, launched, control API healthy, both accounts connected"
+      },
+      "26.930.7945.0": {
+        "app": "26.930.61225",
+        "build": "13232",
+        "level": "verified",
+        "host": [
+          "154.0.8037.98",
+          "154.0.8037.98"
+        ],
+        "asar": {
+          "arm64": "12c29fce16d17383c687f820b660ee4ee7e139b6b50184ae1d13d0a733b57bd6",
+          "x64": "611d6da979d8bbabfec97dd90dcce27a9522e7016e6ccf135d59cab693ab08da"
+        }
       }
     }
   },

@@ -29,9 +29,12 @@ this project uses [Semantic Versioning](https://semver.org/).
   build since 7746 has; the newest build failed on the old default of 17 and nothing else.
 - macOS: the profile menu anchor accepts the `hideUsage` prop that builds from `26.1002` add, and the Usage
   sheet header anchor reads the memo-cache name instead of assuming `t`; both are tested on text from the
-  real bundles. The newest build (`13417`) still stops at the pinned chat summary, whose section list was
-  split into groups, and stays unsupported until that is ported and checked in a real window. The Windows
-  Store build `26.1002.6548.0` stops at the same anchor, because the two patchers share it.
+  real bundles.
+- The chat summary anchor accepts the section list of builds from `26.1002` (eight elements; earlier builds had
+  nine) and keeps the router's row after the fifth. Both patchers share it, so macOS `13417` and the Windows
+  Store builds `26.1002.6548.0` and `26.1002.7124.0` pass this step. On Windows x64 a copy built from
+  `26.1002.7124.0` started and showed the Subscription row in a real chat's summary; routing and failover were
+  not re-run on it.
 - The canary reports the patcher's own error instead of the installer's closing "failed with exit code N" line.
 - Add `scripts/probe_mac_asar.py` to run the macOS patcher's archive-editing steps against any official build
   on any OS, `docs/MAINTAINING.md` (the whole routine), bug and idea issue forms, `SUPPORT.md`,

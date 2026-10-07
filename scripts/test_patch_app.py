@@ -599,5 +599,37 @@ class NewerRendererAnchorTests(unittest.TestCase):
         self.assertIsNone(re.search(patch_app.USAGE_SHEET_HEADER_PATTERN, mixed))
 
 
+class ThreadSummaryListTests(unittest.TestCase):
+    """The chat summary's section list, on text copied from the real bundles."""
+
+    # Builds up to 26.930: nine elements, the subscription goes after the fifth.
+    OLD = "(0,xE.jsxs)(xE.Fragment,{children:[y,b,x,S,C,w,T,E,D]})"
+    # Build 26.1002 (macOS 13417 and 13536, Windows 6548 and 7124): eight elements.
+    NEW = "(0,fE.jsxs)(fE.Fragment,{children:[y,b,x,S,C,w,T,E]})"
+
+    def match(self, text, jsx):
+        return re.search(patch_app.thread_summary_list_pattern(jsx), text)
+
+    def test_the_old_and_the_new_list_both_match_and_split_after_the_fifth(self):
+        old = self.match(self.OLD, "xE")
+        new = self.match(self.NEW, "fE")
+        self.assertEqual(old.group(1, 2), ("y,b,x,S,C", ",w,T,E,D"))
+        self.assertEqual(new.group(1, 2), ("y,b,x,S,C", ",w,T,E"))
+
+    def test_other_lists_in_the_component_are_not_this_one(self):
+        # The fallback list (seven), the group before the outputs (three), a longer list, and elements that are
+        # not plain names.
+        for text in (
+            "(0,fE.jsxs)(fE.Fragment,{children:[k,A,v,j,M,O,F]})",
+            "(0,fE.jsxs)(fE.Fragment,{children:[m,h,g]})",
+            "(0,fE.jsxs)(fE.Fragment,{children:[y,b,x,S,C,w,T,E,D,Z]})",
+            "(0,fE.jsxs)(fE.Fragment,{children:[y,b,x,S,C,w,T,(0,fE.jsx)(Q,{})]})",
+        ):
+            self.assertIsNone(self.match(text, "fE"), text)
+
+    def test_the_list_must_use_the_summary_components_own_jsx_runtime(self):
+        self.assertIsNone(self.match(self.NEW, "xE"))
+
+
 if __name__ == "__main__":
     unittest.main()

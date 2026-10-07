@@ -1979,6 +1979,21 @@ USAGE_SHEET_HEADER_PATTERN = (
 )
 
 
+def thread_summary_list_pattern(jsx: str) -> str:
+    """The chat summary's list of sections, where the owning subscription is added.
+
+    It is the Fragment of plain section elements that the summary component renders after the
+    outputs: five elements, then the rest. Builds before 26.1002 had four more after the fifth
+    (nine in all); 26.1002 dropped an empty placeholder and has three (eight in all). The new
+    element goes after the fifth in both. Any other length is another list.
+    """
+    jsx = re.escape(jsx)
+    return (
+        rf"\(0,{jsx}\.jsxs\)\({jsx}\.Fragment,"
+        rf"\{{children:\[((?:{_IDENT},){{4}}{_IDENT})((?:,{_IDENT}){{3,4}})\]\}}\)"
+    )
+
+
 def patch_chunked_renderer(webview: Path, token: str) -> None:
     """Patch builds (12246+) whose menu, usage sheet and helpers are split.
 
@@ -2319,10 +2334,7 @@ def patch_chunked_renderer(webview: Path, token: str) -> None:
             "K": sections.pop(),
         },
     )
-    list_pattern = (
-        rf"\(0,{re.escape(thread_jsx)}\.jsxs\)\({re.escape(thread_jsx)}\.Fragment,"
-        rf"\{{children:\[((?:{ident},){{4}}{ident})((?:,{ident}){{4}})\]\}}\)"
-    )
+    list_pattern = thread_summary_list_pattern(thread_jsx)
     summary_end = summary.start() + len(summary_body)
     head, tail = thread[: summary.start()], thread[summary.start() : summary_end]
     tail = _sub_once(

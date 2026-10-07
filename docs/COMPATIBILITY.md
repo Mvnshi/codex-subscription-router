@@ -43,11 +43,15 @@ update feed on a real macOS runner and runs the installer against it with an ad-
 `26.930.61225` (`13232`) patched and signed there once the expected count of Computer Use references was
 corrected from 17 to 16 (every build since `7746` has 16); the signed app was not started (a runner
 cannot answer GUI prompts), so it is not recorded as verified and has not been run on a Mac by the
-project. The next release line, `26.1002.51308` (`13417`), gets past the profile menu and the Usage sheet
-header (both follow the new shape exactly, with tests) and stops at the pinned chat summary, whose section
-list is now split into groups; a deliberate port that can be checked in a real window is still to do, so
-that build is not supported and the watcher keeps an issue open for it. `scripts/probe_mac_asar.py`
-reproduces this on any computer.
+project. The next release line, `26.1002` (macOS `13417` and later, Windows Store `26.1002.6548.0` and
+later), changed three renderer anchors; each follows the new shape exactly and is tested on text copied from
+the real bundles: the profile menu header, the Usage sheet header, and the chat summary's section list (nine
+elements before, eight now, the router's row still goes after the fifth). On Windows x64, a throwaway copy
+built from `26.1002.7124.0` started on a PC, opened an existing chat and showed the Subscription row in the
+summary panel with the account's remaining usage. Routing, moving a chat and failover were not re-run on it,
+the change was not run on ARM64 beyond the canary's boot check, and the macOS side of it has not been run on a
+Mac. Until the canary records a build, or someone tests it by hand, the installers still ask first.
+`scripts/probe_mac_asar.py` reproduces the macOS patch steps on any computer.
 
 Two levels are recorded, and the installers treat them differently:
 

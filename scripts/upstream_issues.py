@@ -92,9 +92,10 @@ The newest official **{NAMES[key]}** build is not recorded by the project: `{ent
 
 ### What this means
 
-Installing still works: the installers explain that the build is newer than the ones the project has
-recorded and ask before building from it, and every patch step checks the app and stops by itself if
-it changed. This issue tracks getting the build recorded so nobody is asked.
+The installers explain that the build is newer than the ones the project has recorded and ask before
+building from it. Every patch step checks the app and stops by itself if it changed in a way the patch
+does not cover, in which case nothing is installed and an existing router keeps working. This issue
+tracks getting the build recorded (or ported, if the canary failed) so nobody is asked.
 
 ### To handle it
 

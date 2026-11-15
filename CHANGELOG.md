@@ -5,6 +5,13 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Moving a chat to another subscription works for chats the engine stores in paginated form (every new chat
+  on current engines, and every fork). The older history files the chat is built on are copied along with it,
+  the file name of a fork (`rollout-<time>-<session>_<chat id>.jsonl`) is accepted, and the header id of the
+  copy is corrected so the other account's engine knows the chat under its own id. Before, such a chat failed
+  with "invalid paginated history lineage ... missing source rollout" or "existing chat has an invalid rollout
+  path". The original files are never edited. Checked against the engine bundled with the Oct 9 router build,
+  on a throwaway account home, with two real forked chats (one with three older parts and a compressed root).
 - Add persisted usage-reset policy, defaulting to Ask me. Manual redemption
   requires confirmation; automatic redemption is opt-in, follows account
   failover, and prevents concurrent or uncertain requests from draining credits.

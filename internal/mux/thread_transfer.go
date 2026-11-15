@@ -18,6 +18,9 @@ type threadRequester func(context.Context, string, json.RawMessage) (protocol.Me
 // against their account-local index, so materialize history there before retrying.
 // A previously loaded target must be unloaded before replacing its older copy.
 func resumeTransferredThread(ctx context.Context, threadID, sourcePath, targetHome string, params json.RawMessage, request threadRequester, hideLifecycle ...func([]string) func()) (transferErr error) {
+	if handled, err := resumePaginatedThread(ctx, threadID, sourcePath, targetHome, params, request); handled {
+		return err
+	}
 	response, err := request(ctx, "thread/resume", params)
 	var resumed struct {
 		Thread struct {
@@ -31,7 +34,7 @@ func resumeTransferredThread(ctx context.Context, threadID, sourcePath, targetHo
 		if resumed.Thread.Path == sourcePath {
 			return nil
 		}
-	} else if strings.Contains(err.Error(), "cannot resume paginated thread "+threadID+" with stale path:") || strings.Contains(err.Error(), "cannot resume running thread "+threadID+" with stale path:") {
+	} else if isStalePathError(err) {
 		readParams, _ := json.Marshal(map[string]any{"threadId": threadID, "includeTurns": false})
 		current, readErr := request(ctx, "thread/read", readParams)
 		if readErr != nil {
@@ -93,7 +96,7 @@ func resumeTransferredThread(ctx context.Context, threadID, sourcePath, targetHo
 			return err
 		}
 	}
-	if err := copyTransferredRollout(sourcePath, destination, targetHome); err != nil {
+	if err := copyRolloutForThread(sourcePath, destination, targetHome, threadID); err != nil {
 		return fmt.Errorf("copy chat history: %w", err)
 	}
 	var localParams map[string]any
@@ -109,8 +112,65 @@ func resumeTransferredThread(ctx context.Context, threadID, sourcePath, targetHo
 	return err
 }
 
+// isStalePathError recognizes the engine's refusal to resume a chat it already
+// knows under a different path. For a chat built on an older one it names the
+// chat's root, not the chat being resumed, so only the wording is matched.
+func isStalePathError(err error) bool {
+	text := err.Error()
+	return strings.Contains(text, " with stale path:") &&
+		(strings.Contains(text, "cannot resume paginated thread ") || strings.Contains(text, "cannot resume running thread "))
+}
+
+// resumePaginatedThread moves a chat the engine stores in paginated form (see
+// rollout_lineage.go). The target engine resolves the older parts in its own
+// account home, so they are copied first, then the chat's own file, and the chat
+// is resumed from that local copy. It reports whether it handled the transfer:
+// a chat that is not paginated, or one the target already holds a copy of, is
+// left to the general refresh path in resumeTransferredThread, which needs the
+// older parts to be in place and therefore gets them here too.
+func resumePaginatedThread(ctx context.Context, threadID, sourcePath, targetHome string, params json.RawMessage, request threadRequester) (bool, error) {
+	if rolloutHistoryBase(sourcePath) == "" {
+		return false, nil
+	}
+	sourceHome, ok := rolloutAccountHome(sourcePath)
+	if !ok {
+		return false, nil
+	}
+	destination, err := rolloutDestination(sourceHome, sourcePath, targetHome)
+	if err != nil {
+		return true, err
+	}
+	if err := validateTransferredRollout(threadID, sourcePath, destination, targetHome); err != nil {
+		return true, err
+	}
+	if err := copyRolloutLineage(sourcePath, targetHome); err != nil {
+		return true, fmt.Errorf("copy chat history lineage: %w", err)
+	}
+	if _, err := os.Stat(destination); err == nil {
+		return false, nil
+	}
+	if err := copyRolloutForThread(sourcePath, destination, targetHome, threadID); err != nil {
+		return true, fmt.Errorf("copy chat history: %w", err)
+	}
+	var localParams map[string]any
+	if err := json.Unmarshal(params, &localParams); err != nil {
+		return true, err
+	}
+	localParams["path"] = destination
+	localResume, err := json.Marshal(localParams)
+	if err != nil {
+		return true, err
+	}
+	_, err = request(ctx, "thread/resume", localResume)
+	return true, err
+}
+
 func validateTransferredRollout(threadID, sourcePath, destination, targetHome string) error {
-	if threadID == "" || strings.ContainsAny(threadID, `/\\`) || !strings.HasPrefix(filepath.Base(sourcePath), "rollout-") || !strings.HasSuffix(filepath.Base(sourcePath), "-"+threadID+".jsonl") {
+	// A chat is rollout-<time>-<id>.jsonl, or rollout-<time>-<session>_<id>.jsonl
+	// when it continues an older one.
+	name := filepath.Base(sourcePath)
+	if threadID == "" || strings.ContainsAny(threadID, `/\\`) || !strings.HasPrefix(name, "rollout-") ||
+		!(strings.HasSuffix(name, "-"+threadID+".jsonl") || strings.HasSuffix(name, "_"+threadID+".jsonl")) {
 		return fmt.Errorf("existing chat has an invalid rollout path")
 	}
 	relative, err := filepath.Rel(targetHome, destination)
